@@ -42,15 +42,16 @@
  */
 export { canonicalNQuads, dataIntegrityHash } from "./canonicalize.js";
 export { type ControlledByCheck, documentResolvedControlledBy, prefixControlledBy, } from "./controller.js";
-export { agentAuthorizationFromRdf, buildAgentAuthorizationCredential, credentialFromRdf, credentialMetaFromNode, credentialToJsonLd, credentialToRdf, credentialToTurtle, parseCredentialRdf, } from "./credential.js";
+export { agentAuthorizationFromRdf, buildAgentAuthorizationCredential, credentialFromRdf, credentialMetaFromNode, credentialToJsonLd, credentialToRdf, credentialToTurtle, parseCredentialRdf, signedCredentialToRdf, signedCredentialToTurtle, } from "./credential.js";
 export type { FetchPort, HttpResponse } from "./fetch-port.js";
 export { type IssueInput, issue, issueAgentAuthorization } from "./issue.js";
 export { cryptosuiteForKeyType, exportPrivateJwk, exportPublicJwk, generateKeyPairForSuite, importKeyPair, importPublicKey, type SuiteKeyType, } from "./keys.js";
 export { base58btcDecode, base58btcEncode } from "./multibase.js";
 export { DataIntegritySuite, defaultSuiteRegistry, type ProofSignOptions, type ProofSuite, type ProofVerifyOptions, proofOptionsQuads, SuiteRegistry, } from "./proof.js";
 export { serialize } from "./serialize.js";
-export type { AgentAuthorization, Credential, CredentialSubject, DataIntegrityProof, IssueOptions, JsonValue, KeyPair, Presentation, VerifiableCredential, VerifiablePresentation, VerificationError, VerificationErrorCode, VerificationResult, VerifyOptions, } from "./types.js";
+export type { AgentAuthorization, Credential, CredentialStatus, CredentialSubject, DataIntegrityProof, IssueOptions, JsonValue, KeyPair, Presentation, RevocationStore, VerifiableCredential, VerifiablePresentation, VerificationError, VerificationErrorCode, VerificationResult, VerifyOptions, } from "./types.js";
 export { type VerifyCredentialOptions, verifyCredential } from "./verify.js";
+export { type ParsedVerification, parseAndVerifyCredential } from "./verify-rdf.js";
 export { SVC, SVC_AGENT_AUTHORIZATION, VC, VC_V2_CONTEXT, } from "./vocab.js";
 export { CredentialNode, PresentationNode, ProofNode, VcDataset, wrapVc, } from "./wrappers.js";
 //# sourceMappingURL=index.d.ts.map

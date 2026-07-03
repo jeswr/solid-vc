@@ -203,6 +203,13 @@ var SEC_PROOF_VALUE = `${SEC}proofValue`;
 var SEC_VERIFICATION_METHOD = `${SEC}verificationMethod`;
 var SEC_PROOF_PURPOSE = `${SEC}proofPurpose`;
 var DC_CREATED = "http://purl.org/dc/terms/created";
+var STATUS = "https://www.w3.org/ns/credentials/status#";
+var STATUS_LIST_ENTRY = `${STATUS}BitstringStatusListEntry`;
+var STATUS_LIST = `${STATUS}BitstringStatusList`;
+var STATUS_PURPOSE = `${STATUS}statusPurpose`;
+var STATUS_LIST_INDEX = `${STATUS}statusListIndex`;
+var STATUS_LIST_CREDENTIAL = `${STATUS}statusListCredential`;
+var STATUS_ENCODED_LIST = `${STATUS}encodedList`;
 var SVC_AGENT_AUTHORIZATION = `${SVC}AgentAuthorizationCredential`;
 var SVC_AUTHORIZES = `${SVC}authorizes`;
 var SVC_ACTION = `${SVC}action`;
@@ -556,10 +563,55 @@ function credentialToRdf(credential) {
   for (const s of subjects) {
     writeSubject(b, subject, s);
   }
+  if (credential.credentialStatus !== void 0) {
+    const statuses = Array.isArray(credential.credentialStatus) ? credential.credentialStatus : [credential.credentialStatus];
+    for (const status of statuses) {
+      writeStatus(b, subject, status);
+    }
+  }
   return b.quads();
+}
+function writeStatus(b, credential, status) {
+  const node = typeof status.id === "string" && status.id.length > 0 ? iriRef(status.id) : b.linkBlankNode(credential, VC_CREDENTIAL_STATUS);
+  if (node.kind === "iri") {
+    b.addIri(credential, VC_CREDENTIAL_STATUS, node.value);
+  }
+  b.addType(node, STATUS_LIST_ENTRY);
+  b.addLiteral(node, STATUS_PURPOSE, status.statusPurpose);
+  b.addLiteral(node, STATUS_LIST_INDEX, String(status.statusListIndex));
+  b.addIri(node, STATUS_LIST_CREDENTIAL, status.statusListCredential);
 }
 function credentialToTurtle(credential, format) {
   return serialize2(credentialToRdf(credential), format);
+}
+function purposeIri(purpose) {
+  return looksLikeIri(purpose) ? purpose : `${SEC}${purpose}`;
+}
+function writeProof(b, credential, proof) {
+  const node = b.linkBlankNode(credential, SEC_PROOF);
+  b.addType(node, SEC_DATA_INTEGRITY_PROOF);
+  b.addLiteral(node, SEC_CRYPTOSUITE, proof.cryptosuite);
+  b.addIri(node, SEC_VERIFICATION_METHOD, proof.verificationMethod);
+  b.addIri(node, SEC_PROOF_PURPOSE, purposeIri(proof.proofPurpose));
+  if (proof.created !== void 0) {
+    b.addLiteral(node, DC_CREATED, proof.created, `${XSD}dateTime`);
+  }
+  b.addLiteral(node, SEC_PROOF_VALUE, proof.proofValue);
+}
+function signedCredentialToRdf(vc) {
+  const id = vc.id ?? `urn:uuid:${randomUUID()}`;
+  const { proof: _proof, ...unsigned2 } = vc;
+  const claimQuads = credentialToRdf({ ...unsigned2, id });
+  const b = new GraphBuilder();
+  const subject = iriRef(id);
+  const proofs = Array.isArray(vc.proof) ? vc.proof : [vc.proof];
+  for (const proof of proofs) {
+    writeProof(b, subject, proof);
+  }
+  return [...claimQuads, ...b.quads()];
+}
+function signedCredentialToTurtle(vc, format) {
+  return serialize2(signedCredentialToRdf(vc), format);
 }
 function credentialToJsonLd(credential) {
   const id = credential.id ?? `urn:uuid:${randomUUID()}`;
@@ -574,6 +626,10 @@ function credentialToJsonLd(credential) {
   if (credential.validUntil !== void 0) doc.validUntil = credential.validUntil;
   const subjects = Array.isArray(credential.credentialSubject) ? credential.credentialSubject : [credential.credentialSubject];
   doc.credentialSubject = subjects.length === 1 ? subjects[0] : subjects;
+  if (credential.credentialStatus !== void 0) {
+    const statuses = Array.isArray(credential.credentialStatus) ? credential.credentialStatus : [credential.credentialStatus];
+    doc.credentialStatus = statuses.length === 1 ? statuses[0] : statuses;
+  }
   return doc;
 }
 function credentialMetaFromNode(node) {
@@ -700,13 +756,13 @@ function proofOptionsQuads(proof) {
   b.addType(node, "https://w3id.org/security#DataIntegrityProof");
   b.addLiteral(node, SEC_CRYPTOSUITE, proof.cryptosuite);
   b.addIri(node, SEC_VERIFICATION_METHOD, proof.verificationMethod);
-  b.addIri(node, SEC_PROOF_PURPOSE, purposeIri(proof.proofPurpose));
+  b.addIri(node, SEC_PROOF_PURPOSE, purposeIri2(proof.proofPurpose));
   if (proof.created !== void 0) {
     b.addLiteral(node, DC_CREATED, proof.created, "http://www.w3.org/2001/XMLSchema#dateTime");
   }
   return b.quads();
 }
-function purposeIri(purpose) {
+function purposeIri2(purpose) {
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(purpose) ? purpose : `https://w3id.org/security#${purpose}`;
 }
 function algorithmFor(cryptosuite) {
@@ -856,7 +912,140 @@ function algForJwk(jwk) {
   throw new Error(`unsupported JWK: kty=${jwk.kty} crv=${jwk.crv ?? "?"}`);
 }
 
-// src/verify.ts
+// src/status-list.ts
+import { gunzipSync } from "node:zlib";
+import { base64url } from "multiformats/bases/base64";
+var MIN_BITSTRING_ENTRIES = 131072;
+async function checkCredentialStatus(params) {
+  const errors = [];
+  for (const entry of params.entries) {
+    errors.push(...await checkOneEntry(entry, params));
+  }
+  return errors;
+}
+function monotonicKey(credentialId) {
+  return `${credentialId}|revocation`;
+}
+async function checkOneEntry(entry, params) {
+  if (entry.type !== "BitstringStatusListEntry") {
+    return [retrievalError(`unsupported credentialStatus type "${entry.type}"`)];
+  }
+  const purpose = entry.statusPurpose;
+  if (purpose !== "revocation" && purpose !== "suspension") {
+    return [retrievalError(`unsupported statusPurpose "${purpose}"`)];
+  }
+  const index = Number(entry.statusListIndex);
+  if (!Number.isSafeInteger(index) || index < 0) {
+    return [retrievalError(`invalid statusListIndex "${entry.statusListIndex}"`)];
+  }
+  const monoKey = purpose === "revocation" && params.credentialId !== void 0 ? monotonicKey(params.credentialId) : void 0;
+  if (monoKey !== void 0 && params.revocationStore !== void 0) {
+    if (await params.revocationStore.has(monoKey)) {
+      return [
+        { code: "REVOKED", message: `credential ${params.credentialId} was previously revoked` }
+      ];
+    }
+  }
+  if (params.fetch === void 0) {
+    return [retrievalError("no fetch injected \u2014 cannot retrieve the status list (fail-closed)")];
+  }
+  const list = await fetchStatusList(entry, purpose, params, params.fetch);
+  if ("error" in list) return [list.error];
+  const bitSet = bitAt(list.bytes, index);
+  if (bitSet === void 0) {
+    return [retrievalError(`statusListIndex ${index} is out of range for the bitstring`)];
+  }
+  if (!bitSet) return [];
+  if (purpose === "revocation") {
+    if (monoKey !== void 0 && params.revocationStore !== void 0) {
+      await params.revocationStore.add(monoKey);
+    }
+    return [{ code: "REVOKED", message: `credential is revoked (statusListIndex ${index})` }];
+  }
+  return [{ code: "SUSPENDED", message: `credential is suspended (statusListIndex ${index})` }];
+}
+async function fetchStatusList(entry, purpose, params, fetch) {
+  let body;
+  let contentType2;
+  try {
+    const response = await fetch(entry.statusListCredential);
+    if (!response.ok) {
+      return { error: retrievalError(`status list HTTP ${response.status}`) };
+    }
+    body = await response.text();
+    contentType2 = response.headers.get("content-type") ?? "text/turtle";
+  } catch {
+    return { error: retrievalError("status list retrieval threw") };
+  }
+  const result = await params.verifyStatusCredential(body, contentType2, {
+    resolveKey: params.resolveKey,
+    registry: params.registry,
+    now: params.now,
+    baseIRI: entry.statusListCredential,
+    ...params.fetch !== void 0 ? { fetch: params.fetch } : {},
+    ...params.isControlledBy !== void 0 ? { isControlledBy: params.isControlledBy } : {},
+    // Never recurse into the status-list credential's OWN status (avoids a cycle).
+    checkStatus: false
+  });
+  if (!result.verified) {
+    return { error: retrievalError("status list credential failed verification") };
+  }
+  if (result.issuer !== params.issuer) {
+    return {
+      error: retrievalError(`status list issuer ${result.issuer} != hop issuer ${params.issuer}`)
+    };
+  }
+  const dataset = result.dataset;
+  if (dataset === void 0) {
+    return { error: retrievalError("status list credential parsed to no dataset") };
+  }
+  const listPurpose = firstObjectLiteral(dataset, STATUS_PURPOSE);
+  if (listPurpose !== purpose) {
+    return {
+      error: retrievalError(`status list purpose "${listPurpose}" != entry "${purpose}"`)
+    };
+  }
+  const encoded = firstObjectLiteral(dataset, STATUS_ENCODED_LIST);
+  if (encoded === void 0) {
+    return { error: retrievalError("status list has no encodedList") };
+  }
+  let bytes;
+  try {
+    bytes = decodeBitstring(encoded);
+  } catch {
+    return { error: retrievalError("status list encodedList failed to decode") };
+  }
+  if (bytes.length * 8 < MIN_BITSTRING_ENTRIES) {
+    return { error: retrievalError("status list bitstring is shorter than the minimum size") };
+  }
+  return { bytes };
+}
+function decodeBitstring(encodedList) {
+  const compressed = base64url.decode(encodedList);
+  return new Uint8Array(gunzipSync(compressed));
+}
+function bitAt(bytes, index) {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= bytes.length * 8) {
+    return void 0;
+  }
+  const byteIndex = Math.floor(index / 8);
+  const bitInByte = index % 8;
+  const byte = bytes[byteIndex];
+  return (byte >> 7 - bitInByte & 1) === 1;
+}
+function firstObjectLiteral(dataset, predicate) {
+  for (const quad of dataset.match()) {
+    if (quad.predicate.value === predicate && quad.object.termType === "Literal") {
+      return quad.object.value;
+    }
+  }
+  return void 0;
+}
+function retrievalError(message) {
+  return { code: "STATUS_RETRIEVAL_ERROR", message };
+}
+
+// src/verify-core.ts
 function resolveControlledBy(options, expectedPurpose) {
   if (options.isControlledBy !== void 0) return options.isControlledBy;
   if (options.fetch !== void 0) {
@@ -864,6 +1053,231 @@ function resolveControlledBy(options, expectedPurpose) {
   }
   return () => false;
 }
+function normalizePurpose(purpose) {
+  const hash = purpose.lastIndexOf("#");
+  return hash === -1 ? purpose : purpose.slice(hash + 1);
+}
+function checkValidityWindow(now, validFrom, validUntil) {
+  const errors = [];
+  if (validUntil !== void 0) {
+    const until = Date.parse(validUntil);
+    if (!Number.isNaN(until) && now.getTime() > until) {
+      errors.push({ code: "EXPIRED", message: `credential expired at ${validUntil}` });
+    }
+  }
+  if (validFrom !== void 0) {
+    const from = Date.parse(validFrom);
+    if (!Number.isNaN(from) && now.getTime() < from) {
+      errors.push({ code: "NOT_YET_VALID", message: `credential not valid before ${validFrom}` });
+    }
+  }
+  return errors;
+}
+async function verifyProofSet(input) {
+  const errors = [];
+  for (const proof of input.proofs) {
+    const suite = input.registry.get(proof.cryptosuite);
+    if (suite === void 0) {
+      errors.push({
+        code: "UNKNOWN_CRYPTOSUITE",
+        message: `no registered suite for cryptosuite "${proof.cryptosuite}"`
+      });
+      continue;
+    }
+    if (normalizePurpose(proof.proofPurpose) !== normalizePurpose(input.expectedPurpose)) {
+      errors.push({
+        code: "PROOF_PURPOSE_MISMATCH",
+        message: `proofPurpose "${proof.proofPurpose}" != expected "${input.expectedPurpose}"`
+      });
+    }
+    let controlled;
+    try {
+      controlled = await input.controlledBy(proof.verificationMethod, input.issuer);
+    } catch {
+      controlled = false;
+    }
+    if (!controlled) {
+      errors.push({
+        code: "ISSUER_MISMATCH",
+        message: `verificationMethod ${proof.verificationMethod} is not controlled by issuer ${input.issuer}`
+      });
+    }
+    if (!await verifyOneProof(suite, input.documentQuads, proof, input.resolveKey)) {
+      errors.push({
+        code: "INVALID_SIGNATURE",
+        message: `signature did not verify for proof (${proof.cryptosuite})`
+      });
+    }
+  }
+  return errors;
+}
+async function verifyOneProof(suite, documentQuads, proof, resolveKey) {
+  try {
+    return await suite.verify(documentQuads, proof, { resolveKey });
+  } catch {
+    return false;
+  }
+}
+
+// src/verify-rdf.ts
+async function parseAndVerifyCredential(body, contentType2, options) {
+  let dataset;
+  try {
+    dataset = await parseRdf(body, contentType2, {
+      ...options.baseIRI !== void 0 ? { baseIRI: options.baseIRI } : {}
+    });
+  } catch {
+    return {
+      verified: false,
+      errors: [{ code: "MALFORMED", message: "credential did not parse" }]
+    };
+  }
+  const credentials = wrapVc(dataset).credentials();
+  if (credentials.length !== 1) {
+    return {
+      verified: false,
+      errors: [
+        {
+          code: "MALFORMED",
+          message: `expected exactly one credential node, found ${credentials.length}`
+        }
+      ],
+      dataset
+    };
+  }
+  const node = credentials[0];
+  const issuer = firstIri(node.issuers);
+  if (issuer === void 0) {
+    return {
+      verified: false,
+      errors: [{ code: "MALFORMED", message: "credential has no issuer IRI" }],
+      dataset,
+      credentialId: node.value
+    };
+  }
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const registry = options.registry ?? defaultSuiteRegistry();
+  const expectedPurpose = options.expectedProofPurpose ?? "assertionMethod";
+  const controlledBy = resolveControlledBy(options, expectedPurpose);
+  const errors = [];
+  errors.push(
+    ...checkValidityWindow(now, firstLiteral(node.validFroms), firstLiteral(node.validUntils))
+  );
+  if (options.trustedIssuers !== void 0 && !options.trustedIssuers.includes(issuer)) {
+    errors.push({ code: "UNTRUSTED_ISSUER", message: `issuer ${issuer} is not trusted` });
+  }
+  const proofNodes = [...node.proofs];
+  if (proofNodes.length === 0) {
+    errors.push({ code: "NO_PROOF", message: "credential carries no proof" });
+  }
+  const proofs = [];
+  for (const proofNode of proofNodes) {
+    const parsed = readProof(proofNode);
+    if (parsed === void 0) {
+      errors.push({
+        code: "INVALID_SIGNATURE",
+        message: "malformed proof node (missing cryptosuite/method/purpose/proofValue)"
+      });
+    } else {
+      proofs.push(parsed);
+    }
+  }
+  const documentQuads = documentQuadsWithoutProofs(dataset, proofNodes);
+  errors.push(
+    ...await verifyProofSet({
+      documentQuads,
+      proofs,
+      issuer,
+      registry,
+      controlledBy,
+      expectedPurpose,
+      resolveKey: options.resolveKey
+    })
+  );
+  if (options.checkStatus !== false) {
+    const entries = readStatusEntries(dataset, node.value);
+    if (entries.length > 0) {
+      errors.push(
+        ...await checkCredentialStatus({
+          entries,
+          credentialId: node.value,
+          issuer,
+          now,
+          fetch: options.fetch,
+          revocationStore: options.revocationStore,
+          registry,
+          resolveKey: options.resolveKey,
+          isControlledBy: options.isControlledBy,
+          verifyStatusCredential: parseAndVerifyCredential
+        })
+      );
+    }
+  }
+  return errors.length === 0 ? { verified: true, errors: [], issuer, dataset, credentialId: node.value } : { verified: false, errors, issuer, dataset, credentialId: node.value };
+}
+function readStatusEntries(dataset, credentialId) {
+  const entries = [];
+  for (const link of dataset.match()) {
+    if (link.predicate.value !== VC_CREDENTIAL_STATUS || link.subject.value !== credentialId) {
+      continue;
+    }
+    const entryId = link.object.value;
+    let type = "";
+    let statusPurpose = "";
+    let statusListIndex = "";
+    let statusListCredential = "";
+    for (const q of dataset.match()) {
+      if (q.subject.value !== entryId) continue;
+      if (q.predicate.value === RDF_TYPE && q.object.value === STATUS_LIST_ENTRY) {
+        type = "BitstringStatusListEntry";
+      } else if (q.predicate.value === STATUS_PURPOSE) {
+        statusPurpose = q.object.value;
+      } else if (q.predicate.value === STATUS_LIST_INDEX) {
+        statusListIndex = q.object.value;
+      } else if (q.predicate.value === STATUS_LIST_CREDENTIAL) {
+        statusListCredential = q.object.value;
+      }
+    }
+    entries.push({
+      ...link.object.termType === "NamedNode" ? { id: entryId } : {},
+      type,
+      statusPurpose,
+      statusListIndex,
+      statusListCredential
+    });
+  }
+  return entries;
+}
+function readProof(proof) {
+  const cryptosuite = firstLiteral(proof.cryptosuites);
+  const verificationMethod = firstIri(proof.verificationMethods);
+  const proofValue = firstLiteral(proof.proofValues);
+  const proofPurpose = firstIri(proof.proofPurposes);
+  if (cryptosuite === void 0 || verificationMethod === void 0 || proofValue === void 0 || proofPurpose === void 0) {
+    return void 0;
+  }
+  const created = firstLiteral(proof.createds);
+  return {
+    type: "DataIntegrityProof",
+    cryptosuite,
+    verificationMethod,
+    proofPurpose,
+    proofValue,
+    ...created !== void 0 ? { created } : {}
+  };
+}
+function documentQuadsWithoutProofs(dataset, proofNodes) {
+  const proofIds = new Set(proofNodes.map((p) => p.value));
+  const out = [];
+  for (const quad of dataset.match()) {
+    if (quad.predicate.value === SEC_PROOF) continue;
+    if (proofIds.has(quad.subject.value)) continue;
+    out.push(quad);
+  }
+  return out;
+}
+
+// src/verify.ts
 function proofsOf(vc) {
   const proof = vc.proof;
   return Array.isArray(proof) ? [...proof] : [proof];
@@ -871,6 +1285,11 @@ function proofsOf(vc) {
 function unsigned(vc) {
   const { proof: _proof, ...rest } = vc;
   return rest;
+}
+function statusEntriesOf(vc) {
+  const cs = vc.credentialStatus;
+  if (cs === void 0) return [];
+  return Array.isArray(cs) ? [...cs] : [cs];
 }
 async function verifyCredential(vc, options) {
   const errors = [];
@@ -889,72 +1308,39 @@ async function verifyCredential(vc, options) {
   if (proofs.length === 0) {
     errors.push({ code: "NO_PROOF", message: "credential carries no proof" });
   }
-  if (vc.validUntil !== void 0) {
-    const until = Date.parse(vc.validUntil);
-    if (!Number.isNaN(until) && now.getTime() > until) {
-      errors.push({ code: "EXPIRED", message: `credential expired at ${vc.validUntil}` });
-    }
-  }
-  if (vc.validFrom !== void 0) {
-    const from = Date.parse(vc.validFrom);
-    if (!Number.isNaN(from) && now.getTime() < from) {
-      errors.push({
-        code: "NOT_YET_VALID",
-        message: `credential not valid before ${vc.validFrom}`
-      });
-    }
-  }
+  errors.push(...checkValidityWindow(now, vc.validFrom, vc.validUntil));
   if (options.trustedIssuers !== void 0 && !options.trustedIssuers.includes(issuer)) {
     errors.push({ code: "UNTRUSTED_ISSUER", message: `issuer ${issuer} is not trusted` });
   }
-  const documentQuads = credentialToRdf(unsigned(vc));
-  for (const proof of proofs) {
-    const suite = registry.get(proof.cryptosuite);
-    if (suite === void 0) {
-      errors.push({
-        code: "UNKNOWN_CRYPTOSUITE",
-        message: `no registered suite for cryptosuite "${proof.cryptosuite}"`
-      });
-      continue;
-    }
-    if (normalizePurpose(proof.proofPurpose) !== normalizePurpose(expectedPurpose)) {
-      errors.push({
-        code: "PROOF_PURPOSE_MISMATCH",
-        message: `proofPurpose "${proof.proofPurpose}" != expected "${expectedPurpose}"`
-      });
-    }
-    let controlled;
-    try {
-      controlled = await controlledBy(proof.verificationMethod, issuer);
-    } catch {
-      controlled = false;
-    }
-    if (!controlled) {
-      errors.push({
-        code: "ISSUER_MISMATCH",
-        message: `verificationMethod ${proof.verificationMethod} is not controlled by issuer ${issuer}`
-      });
-    }
-    const ok = await verifyOneProof(suite, documentQuads, proof, options.resolveKey);
-    if (!ok) {
-      errors.push({
-        code: "INVALID_SIGNATURE",
-        message: `signature did not verify for proof (${proof.cryptosuite})`
-      });
-    }
+  errors.push(
+    ...await verifyProofSet({
+      documentQuads: credentialToRdf(unsigned(vc)),
+      proofs,
+      issuer,
+      registry,
+      controlledBy,
+      expectedPurpose,
+      resolveKey: options.resolveKey
+    })
+  );
+  const statusEntries = statusEntriesOf(vc);
+  if (statusEntries.length > 0 && options.checkStatus !== false) {
+    errors.push(
+      ...await checkCredentialStatus({
+        entries: statusEntries,
+        credentialId: typeof vc.id === "string" ? vc.id : void 0,
+        issuer,
+        now,
+        fetch: options.fetch,
+        revocationStore: options.revocationStore,
+        registry,
+        resolveKey: options.resolveKey,
+        isControlledBy: options.isControlledBy,
+        verifyStatusCredential: parseAndVerifyCredential
+      })
+    );
   }
   return errors.length === 0 ? { verified: true, errors: [], issuer } : { verified: false, errors, issuer };
-}
-async function verifyOneProof(suite, documentQuads, proof, resolveKey) {
-  try {
-    return await suite.verify(documentQuads, proof, { resolveKey });
-  } catch {
-    return false;
-  }
-}
-function normalizePurpose(purpose) {
-  const hash = purpose.lastIndexOf("#");
-  return hash === -1 ? purpose : purpose.slice(hash + 1);
 }
 export {
   CredentialNode,
@@ -988,10 +1374,13 @@ export {
   importPublicKey,
   issue,
   issueAgentAuthorization,
+  parseAndVerifyCredential,
   parseCredentialRdf,
   prefixControlledBy,
   proofOptionsQuads,
   serialize2 as serialize,
+  signedCredentialToRdf,
+  signedCredentialToTurtle,
   verifyCredential,
   wrapVc
 };

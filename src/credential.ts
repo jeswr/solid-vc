@@ -10,8 +10,28 @@ import { randomUUID } from "node:crypto";
 import { parseRdf } from "@jeswr/fetch-rdf";
 import type { DatasetCore, Quad } from "@rdfjs/types";
 import { serialize } from "./serialize.js";
-import type { AgentAuthorization, Credential, CredentialSubject, JsonValue } from "./types.js";
+import type {
+  AgentAuthorization,
+  Credential,
+  CredentialStatus,
+  CredentialSubject,
+  DataIntegrityProof,
+  JsonValue,
+  VerifiableCredential,
+} from "./types.js";
 import {
+  DC_CREATED,
+  SEC,
+  SEC_CRYPTOSUITE,
+  SEC_DATA_INTEGRITY_PROOF,
+  SEC_PROOF,
+  SEC_PROOF_PURPOSE,
+  SEC_PROOF_VALUE,
+  SEC_VERIFICATION_METHOD,
+  STATUS_LIST_CREDENTIAL,
+  STATUS_LIST_ENTRY,
+  STATUS_LIST_INDEX,
+  STATUS_PURPOSE,
   SVC_ACTION,
   SVC_AGENT_AUTHORIZATION,
   SVC_AUTHORIZES,
@@ -19,6 +39,7 @@ import {
   SVC_POLICY,
   SVC_TARGET,
   VC_CREDENTIAL,
+  VC_CREDENTIAL_STATUS,
   VC_CREDENTIAL_SUBJECT,
   VC_ISSUER,
   VC_VALID_FROM,
@@ -140,12 +161,87 @@ export function credentialToRdf(credential: Credential): Quad[] {
   for (const s of subjects) {
     writeSubject(b, subject, s);
   }
+  if (credential.credentialStatus !== undefined) {
+    const statuses = Array.isArray(credential.credentialStatus)
+      ? credential.credentialStatus
+      : [credential.credentialStatus];
+    for (const status of statuses) {
+      writeStatus(b, subject, status);
+    }
+  }
   return b.quads();
+}
+
+/**
+ * Lower one `credentialStatus` entry UNDER the credential (so the Data Integrity
+ * proof covers it — an attacker cannot strip or swap the revocation pointer without
+ * breaking the signature). Written as a `BitstringStatusListEntry` node linked via
+ * `cred:credentialStatus`, with the entry `id` as the node IRI when present.
+ */
+function writeStatus(b: GraphBuilder, credential: NodeRef, status: CredentialStatus): void {
+  const node: NodeRef =
+    typeof status.id === "string" && status.id.length > 0
+      ? iriRef(status.id)
+      : b.linkBlankNode(credential, VC_CREDENTIAL_STATUS);
+  if (node.kind === "iri") {
+    b.addIri(credential, VC_CREDENTIAL_STATUS, node.value);
+  }
+  b.addType(node, STATUS_LIST_ENTRY);
+  b.addLiteral(node, STATUS_PURPOSE, status.statusPurpose);
+  b.addLiteral(node, STATUS_LIST_INDEX, String(status.statusListIndex));
+  b.addIri(node, STATUS_LIST_CREDENTIAL, status.statusListCredential);
 }
 
 /** Serialise a credential's claim graph to Turtle (default) or another n3 format. */
 export function credentialToTurtle(credential: Credential, format?: string): Promise<string> {
   return serialize(credentialToRdf(credential), format);
+}
+
+/** Resolve a bare `proofPurpose` token (e.g. `assertionMethod`) to its sec: IRI. */
+function purposeIri(purpose: string): string {
+  return looksLikeIri(purpose) ? purpose : `${SEC}${purpose}`;
+}
+
+/** Lower one embedded Data Integrity `proof` node under the credential subject. */
+function writeProof(b: GraphBuilder, credential: NodeRef, proof: DataIntegrityProof): void {
+  const node = b.linkBlankNode(credential, SEC_PROOF);
+  b.addType(node, SEC_DATA_INTEGRITY_PROOF);
+  b.addLiteral(node, SEC_CRYPTOSUITE, proof.cryptosuite);
+  b.addIri(node, SEC_VERIFICATION_METHOD, proof.verificationMethod);
+  b.addIri(node, SEC_PROOF_PURPOSE, purposeIri(proof.proofPurpose));
+  if (proof.created !== undefined) {
+    b.addLiteral(node, DC_CREATED, proof.created, `${XSD}dateTime`);
+  }
+  b.addLiteral(node, SEC_PROOF_VALUE, proof.proofValue);
+}
+
+/**
+ * Lower a SIGNED {@link VerifiableCredential} — the claim graph PLUS its embedded
+ * Data Integrity proof(s) — to RDF quads, so an issuer can PUBLISH a signed VC (e.g.
+ * a status-list credential) as a dereferenceable RDF document that
+ * {@link parseAndVerifyCredential} can re-verify over its exact bytes. The credential
+ * `@id` is fixed once (a random `urn:uuid:` only if the VC omits it) so the claim
+ * graph and the proof link share the same subject.
+ */
+export function signedCredentialToRdf(vc: VerifiableCredential): Quad[] {
+  const id = vc.id ?? `urn:uuid:${randomUUID()}`;
+  const { proof: _proof, ...unsigned } = vc;
+  const claimQuads = credentialToRdf({ ...(unsigned as Credential), id });
+  const b = new GraphBuilder();
+  const subject = iriRef(id);
+  const proofs = Array.isArray(vc.proof) ? vc.proof : [vc.proof];
+  for (const proof of proofs) {
+    writeProof(b, subject, proof);
+  }
+  return [...claimQuads, ...b.quads()];
+}
+
+/** Serialise a SIGNED VC (claim graph + proof) to Turtle (default) or another n3 format. */
+export function signedCredentialToTurtle(
+  vc: VerifiableCredential,
+  format?: string,
+): Promise<string> {
+  return serialize(signedCredentialToRdf(vc), format);
 }
 
 /**
@@ -168,6 +264,12 @@ export function credentialToJsonLd(credential: Credential): Record<string, unkno
     ? credential.credentialSubject
     : [credential.credentialSubject];
   doc.credentialSubject = subjects.length === 1 ? subjects[0] : subjects;
+  if (credential.credentialStatus !== undefined) {
+    const statuses = Array.isArray(credential.credentialStatus)
+      ? credential.credentialStatus
+      : [credential.credentialStatus];
+    doc.credentialStatus = statuses.length === 1 ? statuses[0] : statuses;
+  }
   return doc;
 }
 

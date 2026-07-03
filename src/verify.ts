@@ -13,23 +13,33 @@
 //   6. proof purpose  — proof.proofPurpose matches the expected purpose
 //   7. validity       — now ∈ [validFrom, validUntil]
 //   8. trusted issuer — (optional) the issuer is in the caller's allowlist
+//   9. status         — the Bitstring Status List v1.0 revocation/suspension gate
 //
 // Fail-closed throughout: an unresolvable key, an unknown suite, a malformed
-// proofValue, a missing field — all become `verified: false` with a reason, never
-// a thrown exception or a silent accept.
+// proofValue, a missing field, an unreachable status list — all become
+// `verified: false` with a reason, never a thrown exception or a silent accept.
+//
+// The per-proof / validity / controller gates live once in src/verify-core.ts
+// (shared with the parsed-RDF verifier src/verify-rdf.ts); the status gate lives in
+// src/status-list.ts. This file is the structured-credential entry point that wires
+// them together.
 
-import { type ControlledByCheck, documentResolvedControlledBy } from "./controller.js";
+import type { ControlledByCheck } from "./controller.js";
 import { credentialToRdf } from "./credential.js";
-import type { ProofSuite, ProofVerifyOptions, SuiteRegistry } from "./proof.js";
+import type { ProofVerifyOptions, SuiteRegistry } from "./proof.js";
 import { defaultSuiteRegistry } from "./proof.js";
+import { checkCredentialStatus } from "./status-list.js";
 import type {
   Credential,
+  CredentialStatus,
   DataIntegrityProof,
   VerifiableCredential,
   VerificationError,
   VerificationResult,
   VerifyOptions,
 } from "./types.js";
+import { checkValidityWindow, resolveControlledBy, verifyProofSet } from "./verify-core.js";
+import { parseAndVerifyCredential } from "./verify-rdf.js";
 
 /** Options for {@link verifyCredential}: the suite registry + the key resolver. */
 export interface VerifyCredentialOptions extends VerifyOptions {
@@ -50,25 +60,15 @@ export interface VerifyCredentialOptions extends VerifyOptions {
    * async — the default resolves a document). When omitted, the default is:
    *   - if {@link VerifyOptions.fetch} is provided → the DOCUMENT-RESOLVED check
    *     ({@link documentResolvedControlledBy}) — the SAFE default that fetches the
-   *     issuer's own authoritative document and confirms it lists the method under
-   *     `sec:assertionMethod` / `sec:controller`;
+   *     issuer's own authoritative document and confirms it asserts
+   *     `<issuer> <verificationRelationship> <verificationMethod>`, where the
+   *     relationship matches the expected proof purpose (`sec:assertionMethod` by
+   *     default);
    *   - if NO `fetch` is provided → FAIL CLOSED (deny). The unsafe string-prefix
    *     heuristic is NO LONGER the default; import `prefixControlledBy` to opt into
    *     it explicitly (documented unsafe).
    */
   readonly isControlledBy?: ControlledByCheck;
-}
-
-/** Select the controller check: explicit override → document-resolved (if fetch) → fail-closed. */
-function resolveControlledBy(
-  options: VerifyCredentialOptions,
-  expectedPurpose: string,
-): ControlledByCheck {
-  if (options.isControlledBy !== undefined) return options.isControlledBy;
-  if (options.fetch !== undefined) {
-    return documentResolvedControlledBy(options.fetch, expectedPurpose);
-  }
-  return () => false; // no override and no fetch → cannot resolve control → deny.
 }
 
 /** Normalise one-or-many proofs to an array. */
@@ -83,6 +83,13 @@ function proofsOf(vc: VerifiableCredential): DataIntegrityProof[] {
 function unsigned(vc: VerifiableCredential): Credential {
   const { proof: _proof, ...rest } = vc;
   return rest as Credential;
+}
+
+/** Normalise one-or-many `credentialStatus` entries to an array (empty if absent). */
+function statusEntriesOf(vc: VerifiableCredential): CredentialStatus[] {
+  const cs = vc.credentialStatus;
+  if (cs === undefined) return [];
+  return Array.isArray(cs) ? [...(cs as readonly CredentialStatus[])] : [cs as CredentialStatus];
 }
 
 /**
@@ -122,91 +129,48 @@ export async function verifyCredential(
   }
 
   // 7. validity window (independent of any proof)
-  if (vc.validUntil !== undefined) {
-    const until = Date.parse(vc.validUntil);
-    if (!Number.isNaN(until) && now.getTime() > until) {
-      errors.push({ code: "EXPIRED", message: `credential expired at ${vc.validUntil}` });
-    }
-  }
-  if (vc.validFrom !== undefined) {
-    const from = Date.parse(vc.validFrom);
-    if (!Number.isNaN(from) && now.getTime() < from) {
-      errors.push({
-        code: "NOT_YET_VALID",
-        message: `credential not valid before ${vc.validFrom}`,
-      });
-    }
-  }
+  errors.push(...checkValidityWindow(now, vc.validFrom, vc.validUntil));
 
   // 8. trusted issuer (optional allowlist)
   if (options.trustedIssuers !== undefined && !options.trustedIssuers.includes(issuer)) {
     errors.push({ code: "UNTRUSTED_ISSUER", message: `issuer ${issuer} is not trusted` });
   }
 
-  // The canonical bytes the signature must cover: the claim graph WITHOUT proof.
-  const documentQuads = credentialToRdf(unsigned(vc));
+  // 3–6: check EACH proof over the canonical claim graph (proof removed).
+  errors.push(
+    ...(await verifyProofSet({
+      documentQuads: credentialToRdf(unsigned(vc)),
+      proofs,
+      issuer,
+      registry,
+      controlledBy,
+      expectedPurpose,
+      resolveKey: options.resolveKey,
+    })),
+  );
 
-  // 3–6: check EACH proof (a multi-proof credential must have every proof valid).
-  for (const proof of proofs) {
-    const suite = registry.get(proof.cryptosuite);
-    if (suite === undefined) {
-      errors.push({
-        code: "UNKNOWN_CRYPTOSUITE",
-        message: `no registered suite for cryptosuite "${proof.cryptosuite}"`,
-      });
-      continue;
-    }
-    // 6. proof purpose
-    if (normalizePurpose(proof.proofPurpose) !== normalizePurpose(expectedPurpose)) {
-      errors.push({
-        code: "PROOF_PURPOSE_MISMATCH",
-        message: `proofPurpose "${proof.proofPurpose}" != expected "${expectedPurpose}"`,
-      });
-    }
-    // 5. issuer binding (may resolve a controller document → await; fail-closed)
-    let controlled: boolean;
-    try {
-      controlled = await controlledBy(proof.verificationMethod, issuer);
-    } catch {
-      controlled = false;
-    }
-    if (!controlled) {
-      errors.push({
-        code: "ISSUER_MISMATCH",
-        message: `verificationMethod ${proof.verificationMethod} is not controlled by issuer ${issuer}`,
-      });
-    }
-    // 4. signature
-    const ok = await verifyOneProof(suite, documentQuads, proof, options.resolveKey);
-    if (!ok) {
-      errors.push({
-        code: "INVALID_SIGNATURE",
-        message: `signature did not verify for proof (${proof.cryptosuite})`,
-      });
-    }
+  // 9. Bitstring Status List status gate (revocation / suspension). Skipped only
+  // when explicitly disabled (checkStatus === false) — a production verify keeps it
+  // on; a skipped revocation check is an accept.
+  const statusEntries = statusEntriesOf(vc);
+  if (statusEntries.length > 0 && options.checkStatus !== false) {
+    errors.push(
+      ...(await checkCredentialStatus({
+        entries: statusEntries,
+        credentialId: typeof vc.id === "string" ? vc.id : undefined,
+        issuer,
+        now,
+        fetch: options.fetch,
+        revocationStore: options.revocationStore,
+        registry,
+        resolveKey: options.resolveKey,
+        isControlledBy: options.isControlledBy,
+        verifyStatusCredential: parseAndVerifyCredential,
+      })),
+    );
   }
 
   return errors.length === 0
     ? { verified: true, errors: [], issuer }
     : { verified: false, errors, issuer };
-}
-
-/** Verify one proof through its suite, mapping any throw to a fail-closed `false`. */
-async function verifyOneProof(
-  suite: ProofSuite,
-  documentQuads: ReturnType<typeof credentialToRdf>,
-  proof: DataIntegrityProof,
-  resolveKey: ProofVerifyOptions["resolveKey"],
-): Promise<boolean> {
-  try {
-    return await suite.verify(documentQuads, proof, { resolveKey });
-  } catch {
-    return false;
-  }
-}
-
-/** Strip a bare `proofPurpose` token to compare regardless of IRI vs short form. */
-function normalizePurpose(purpose: string): string {
-  const hash = purpose.lastIndexOf("#");
-  return hash === -1 ? purpose : purpose.slice(hash + 1);
 }

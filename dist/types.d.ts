@@ -26,6 +26,30 @@ export interface Credential {
     readonly validUntil?: string;
     /** The credential subject(s) — the claims being asserted. */
     readonly credentialSubject: CredentialSubject | readonly CredentialSubject[];
+    /**
+     * The credential's revocation/suspension status entry (or entries) — a W3C
+     * Bitstring Status List v1.0 `BitstringStatusListEntry`. Lowered UNDER the proof
+     * (so an attacker cannot strip or swap it), and checked by {@link verifyCredential}'s
+     * status gate. Absent = no status list (no revocation information).
+     */
+    readonly credentialStatus?: CredentialStatus | readonly CredentialStatus[];
+}
+/**
+ * A W3C Bitstring Status List v1.0 `credentialStatus` entry: a pointer into a
+ * published, GZIP-compressed bitstring at `statusListCredential`, bit `statusListIndex`,
+ * for the given `statusPurpose` (`"revocation"` — permanent; `"suspension"` — reversible).
+ */
+export interface CredentialStatus {
+    /** The status entry IRI (`@id`). Optional. */
+    readonly id?: string;
+    /** The entry type — MUST be `"BitstringStatusListEntry"`. */
+    readonly type: string;
+    /** `"revocation"` (permanent) or `"suspension"` (reversible while set). */
+    readonly statusPurpose: string;
+    /** This credential's bit position within the referenced bitstring. */
+    readonly statusListIndex: string | number;
+    /** The IRI of the `BitstringStatusListCredential` to dereference and check. */
+    readonly statusListCredential: string;
 }
 /** A credential subject: an optional `id` (the subject IRI) plus arbitrary claims. */
 export interface CredentialSubject {
@@ -133,7 +157,7 @@ export interface VerificationError {
     readonly message: string;
 }
 /** The closed set of verification failure categories. */
-export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER";
+export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR";
 /** Options shared by the verification entrypoints. */
 export interface VerifyOptions {
     /** The instant to evaluate validity against (default `new Date()`). Injectable for tests. */
@@ -155,6 +179,33 @@ export interface VerifyOptions {
      * silently skipping — a skipped revocation/controller check is an accept.
      */
     readonly fetch?: FetchPort;
+    /**
+     * Whether to run the Bitstring Status List v1.0 status gate when the credential
+     * carries a `credentialStatus` (default `true`). Set `false` only to isolate other
+     * gates in a test — a production verify MUST keep it on (a skipped revocation check
+     * is an accept). Internally forced `false` when verifying a status-list credential
+     * (to avoid recursion).
+     */
+    readonly checkStatus?: boolean;
+    /**
+     * A monotonic revocation memory for the `"revocation"` purpose (this note's D7):
+     * once a credential has been observed revoked, a later CLEAR bit MUST NOT un-revoke
+     * it (closing the "attacker briefly flips the bit back during a cache window" replay).
+     * Injectable + persistable; omit to disable monotonic memory (each check is fresh).
+     * `"suspension"` is the reversible purpose and never consults this store.
+     */
+    readonly revocationStore?: RevocationStore;
+}
+/**
+ * A tiny persisted set for revocation MONOTONICITY: it remembers the keys of
+ * credentials observed revoked so a later clear read cannot un-revoke them. Keys are
+ * opaque (`<credentialId>|revocation`). Both methods may be sync or async.
+ */
+export interface RevocationStore {
+    /** Whether `key` was previously recorded revoked. */
+    has(key: string): boolean | Promise<boolean>;
+    /** Record `key` as revoked (idempotent). */
+    add(key: string): void | Promise<void>;
 }
 /** Options for issuing/signing. */
 export interface IssueOptions {

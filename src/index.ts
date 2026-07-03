@@ -59,6 +59,8 @@ export {
   credentialToRdf,
   credentialToTurtle,
   parseCredentialRdf,
+  signedCredentialToRdf,
+  signedCredentialToTurtle,
 } from "./credential.js";
 // --- the injectable network port (inject an SSRF-guarded fetch) -------------
 export type { FetchPort, HttpResponse } from "./fetch-port.js";
@@ -90,12 +92,14 @@ export { serialize } from "./serialize.js";
 export type {
   AgentAuthorization,
   Credential,
+  CredentialStatus,
   CredentialSubject,
   DataIntegrityProof,
   IssueOptions,
   JsonValue,
   KeyPair,
   Presentation,
+  RevocationStore,
   VerifiableCredential,
   VerifiablePresentation,
   VerificationError,
@@ -104,6 +108,8 @@ export type {
   VerifyOptions,
 } from "./types.js";
 export { type VerifyCredentialOptions, verifyCredential } from "./verify.js";
+// --- verify a fetched, serialized VC over its EXACT RDF graph ---------------
+export { type ParsedVerification, parseAndVerifyCredential } from "./verify-rdf.js";
 // --- vocab (the standard + the one documented @jeswr extension) ------------
 export {
   SVC,

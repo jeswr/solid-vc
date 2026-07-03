@@ -1,4 +1,4 @@
-import { type ControlledByCheck } from "./controller.js";
+import type { ControlledByCheck } from "./controller.js";
 import type { ProofVerifyOptions, SuiteRegistry } from "./proof.js";
 import type { VerifiableCredential, VerificationResult, VerifyOptions } from "./types.js";
 /** Options for {@link verifyCredential}: the suite registry + the key resolver. */
@@ -20,8 +20,10 @@ export interface VerifyCredentialOptions extends VerifyOptions {
      * async — the default resolves a document). When omitted, the default is:
      *   - if {@link VerifyOptions.fetch} is provided → the DOCUMENT-RESOLVED check
      *     ({@link documentResolvedControlledBy}) — the SAFE default that fetches the
-     *     issuer's own authoritative document and confirms it lists the method under
-     *     `sec:assertionMethod` / `sec:controller`;
+     *     issuer's own authoritative document and confirms it asserts
+     *     `<issuer> <verificationRelationship> <verificationMethod>`, where the
+     *     relationship matches the expected proof purpose (`sec:assertionMethod` by
+     *     default);
      *   - if NO `fetch` is provided → FAIL CLOSED (deny). The unsafe string-prefix
      *     heuristic is NO LONGER the default; import `prefixControlledBy` to opt into
      *     it explicitly (documented unsafe).

@@ -1,5 +1,5 @@
 import type { DatasetCore, Quad } from "@rdfjs/types";
-import type { AgentAuthorization, Credential } from "./types.js";
+import type { AgentAuthorization, Credential, VerifiableCredential } from "./types.js";
 import { type CredentialNode } from "./wrappers.js";
 /**
  * Lower a structured {@link Credential} (the UNSIGNED claim graph — no proof) to
@@ -11,6 +11,17 @@ import { type CredentialNode } from "./wrappers.js";
 export declare function credentialToRdf(credential: Credential): Quad[];
 /** Serialise a credential's claim graph to Turtle (default) or another n3 format. */
 export declare function credentialToTurtle(credential: Credential, format?: string): Promise<string>;
+/**
+ * Lower a SIGNED {@link VerifiableCredential} — the claim graph PLUS its embedded
+ * Data Integrity proof(s) — to RDF quads, so an issuer can PUBLISH a signed VC (e.g.
+ * a status-list credential) as a dereferenceable RDF document that
+ * {@link parseAndVerifyCredential} can re-verify over its exact bytes. The credential
+ * `@id` is fixed once (a random `urn:uuid:` only if the VC omits it) so the claim
+ * graph and the proof link share the same subject.
+ */
+export declare function signedCredentialToRdf(vc: VerifiableCredential): Quad[];
+/** Serialise a SIGNED VC (claim graph + proof) to Turtle (default) or another n3 format. */
+export declare function signedCredentialToTurtle(vc: VerifiableCredential, format?: string): Promise<string>;
 /**
  * Build the VC 2.0 JSON-LD document for a credential's claim graph (no proof): a
  * deterministic projection kept in lock-step with the RDF quads, with the pinned

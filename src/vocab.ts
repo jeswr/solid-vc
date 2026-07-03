@@ -93,6 +93,25 @@ export const SEC_PROOF_PURPOSE = `${SEC}proofPurpose` as const;
 /** The dateTime the proof was created (Data Integrity uses `dc:created`). */
 export const DC_CREATED = "http://purl.org/dc/terms/created" as const;
 
+// --- Bitstring Status List v1.0 (W3C REC) — the revocation status gate -----
+/**
+ * The W3C Bitstring Status List v1.0 vocabulary namespace (the `credentials/v2`
+ * context expands `BitstringStatusListEntry`, `statusPurpose`, `encodedList`, … here).
+ */
+export const STATUS = "https://www.w3.org/ns/credentials/status#" as const;
+/** `status:BitstringStatusListEntry` — the `credentialStatus` entry type. */
+export const STATUS_LIST_ENTRY = `${STATUS}BitstringStatusListEntry` as const;
+/** `status:BitstringStatusList` — the status-list credential's subject type. */
+export const STATUS_LIST = `${STATUS}BitstringStatusList` as const;
+/** `status:statusPurpose` — `"revocation"` | `"suspension"` (must match entry ↔ list). */
+export const STATUS_PURPOSE = `${STATUS}statusPurpose` as const;
+/** `status:statusListIndex` — the bit position of THIS credential in the list. */
+export const STATUS_LIST_INDEX = `${STATUS}statusListIndex` as const;
+/** `status:statusListCredential` — the IRI of the status-list credential to fetch. */
+export const STATUS_LIST_CREDENTIAL = `${STATUS}statusListCredential` as const;
+/** `status:encodedList` — the multibase-base64url, GZIP-compressed bitstring. */
+export const STATUS_ENCODED_LIST = `${STATUS}encodedList` as const;
+
 // --- The @jeswr agent-authorization extension (minted, documented) --------
 /**
  * `svc:AgentAuthorizationCredential` — the headline credential type: a signed

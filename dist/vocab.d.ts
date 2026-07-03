@@ -65,6 +65,23 @@ export declare const SEC_PROOF_PURPOSE: "https://w3id.org/security#proofPurpose"
 /** The dateTime the proof was created (Data Integrity uses `dc:created`). */
 export declare const DC_CREATED: "http://purl.org/dc/terms/created";
 /**
+ * The W3C Bitstring Status List v1.0 vocabulary namespace (the `credentials/v2`
+ * context expands `BitstringStatusListEntry`, `statusPurpose`, `encodedList`, … here).
+ */
+export declare const STATUS: "https://www.w3.org/ns/credentials/status#";
+/** `status:BitstringStatusListEntry` — the `credentialStatus` entry type. */
+export declare const STATUS_LIST_ENTRY: "https://www.w3.org/ns/credentials/status#BitstringStatusListEntry";
+/** `status:BitstringStatusList` — the status-list credential's subject type. */
+export declare const STATUS_LIST: "https://www.w3.org/ns/credentials/status#BitstringStatusList";
+/** `status:statusPurpose` — `"revocation"` | `"suspension"` (must match entry ↔ list). */
+export declare const STATUS_PURPOSE: "https://www.w3.org/ns/credentials/status#statusPurpose";
+/** `status:statusListIndex` — the bit position of THIS credential in the list. */
+export declare const STATUS_LIST_INDEX: "https://www.w3.org/ns/credentials/status#statusListIndex";
+/** `status:statusListCredential` — the IRI of the status-list credential to fetch. */
+export declare const STATUS_LIST_CREDENTIAL: "https://www.w3.org/ns/credentials/status#statusListCredential";
+/** `status:encodedList` — the multibase-base64url, GZIP-compressed bitstring. */
+export declare const STATUS_ENCODED_LIST: "https://www.w3.org/ns/credentials/status#encodedList";
+/**
  * `svc:AgentAuthorizationCredential` — the headline credential type: a signed
  * assertion that a principal (a WebID) authorizes an agent (a WebID / agent-card
  * IRI) to perform an action over a target, optionally bound to an ODRL policy.

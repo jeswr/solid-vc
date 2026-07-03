@@ -42,6 +42,7 @@ export type ControlledByCheck = (verificationMethod: string, issuer: string) => 
 
 // @public
 interface Credential_2 {
+    readonly credentialStatus?: CredentialStatus | readonly CredentialStatus[];
     readonly credentialSubject: CredentialSubject | readonly CredentialSubject[];
     readonly id?: string;
     readonly issuer: string;
@@ -77,6 +78,15 @@ export class CredentialNode extends TermWrapper {
     get validFroms(): Set<TermWrapper>;
     // (undocumented)
     get validUntils(): Set<TermWrapper>;
+}
+
+// @public
+export interface CredentialStatus {
+    readonly id?: string;
+    readonly statusListCredential: string;
+    readonly statusListIndex: string | number;
+    readonly statusPurpose: string;
+    readonly type: string;
 }
 
 // @public
@@ -192,7 +202,18 @@ export interface KeyPair {
 }
 
 // @public
+export function parseAndVerifyCredential(body: string, contentType: string, options: VerifyCredentialOptions & {
+    readonly baseIRI?: string;
+}): Promise<ParsedVerification>;
+
+// @public
 export function parseCredentialRdf(body: string, contentType?: string): Promise<DatasetCore>;
+
+// @public
+export interface ParsedVerification extends VerificationResult {
+    readonly credentialId?: string;
+    readonly dataset?: DatasetCore;
+}
 
 // @public
 export function prefixControlledBy(verificationMethod: string, issuer: string): boolean;
@@ -256,7 +277,19 @@ export interface ProofVerifyOptions {
 }
 
 // @public
+export interface RevocationStore {
+    add(key: string): void | Promise<void>;
+    has(key: string): boolean | Promise<boolean>;
+}
+
+// @public
 export function serialize(quads: readonly Quad[], format?: string): Promise<string>;
+
+// @public
+export function signedCredentialToRdf(vc: VerifiableCredential): Quad[];
+
+// @public
+export function signedCredentialToTurtle(vc: VerifiableCredential, format?: string): Promise<string>;
 
 // @public
 export type SuiteKeyType = "Ed25519" | "P-256";
@@ -304,7 +337,7 @@ export interface VerificationError {
 }
 
 // @public
-export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER";
+export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR";
 
 // @public
 export interface VerificationResult {
@@ -325,9 +358,11 @@ export interface VerifyCredentialOptions extends VerifyOptions {
 
 // @public
 export interface VerifyOptions {
+    readonly checkStatus?: boolean;
     readonly expectedProofPurpose?: string;
     readonly fetch?: FetchPort;
     readonly now?: Date;
+    readonly revocationStore?: RevocationStore;
     readonly trustedIssuers?: readonly string[];
 }
 
