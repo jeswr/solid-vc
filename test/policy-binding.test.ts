@@ -12,10 +12,11 @@ import { describe, expect, it } from "vitest";
 import { prefixControlledBy } from "../src/controller.js";
 import { signedCredentialToTurtle } from "../src/credential.js";
 import type { FetchPort, HttpResponse } from "../src/fetch-port.js";
-import { issueAgentAuthorization } from "../src/issue.js";
+import { issue, issueAgentAuthorization } from "../src/issue.js";
 import { resolveBoundPolicy } from "../src/policy-binding.js";
 import { verifyCredential } from "../src/verify.js";
 import { parseAndVerifyCredential } from "../src/verify-rdf.js";
+import { SVC_POLICY } from "../src/vocab.js";
 import { ACL_READ, AGENT, ISSUER, issuerKey, keyResolver } from "./helpers.js";
 
 const POLICY_URL = "https://alice.example/policies/p1.ttl";
@@ -218,5 +219,34 @@ describe("verifyCredential ENFORCES policy binding (the High finding)", () => {
       fetch: fakeFetch({ [POLICY_URL]: POLICY_OCTETS }),
     });
     expect(result.verified).toBe(true);
+  });
+});
+
+describe("resolveBoundPolicy — array-shaped svc:policy is not embedded (roborev)", () => {
+  const agentAuthzCred = (policy: unknown) => ({
+    issuer: ISSUER,
+    type: ["AgentAuthorizationCredential"],
+    credentialSubject: { id: ISSUER, [SVC_POLICY]: policy },
+  });
+
+  it("REJECTS a single-item svc:policy array as a bare reference (not embedded)", async () => {
+    const key = await issuerKey();
+    const vc = await issue({ credential: agentAuthzCred([POLICY_URL]) as never, key });
+    const result = await resolveBoundPolicy(vc, {
+      fetch: fakeFetch({ [POLICY_URL]: POLICY_OCTETS }),
+    });
+    expect(result.policy).toBeUndefined();
+    expect(result.errors.map((e) => e.code)).toContain("POLICY_INTEGRITY");
+  });
+
+  it("REJECTS a multi-item svc:policy array as multiple policies", async () => {
+    const key = await issuerKey();
+    const vc = await issue({
+      credential: agentAuthzCred([POLICY_URL, "https://alice.example/policies/p2.ttl"]) as never,
+      key,
+    });
+    const result = await resolveBoundPolicy(vc, {});
+    expect(result.policy).toBeUndefined();
+    expect(result.errors.map((e) => e.code)).toContain("POLICY_INTEGRITY");
   });
 });

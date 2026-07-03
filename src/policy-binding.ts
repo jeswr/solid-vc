@@ -145,7 +145,12 @@ async function referenceBinding(
   };
 }
 
-/** Every `svc:policy` claim across the credential's subjects (each subject may carry one). */
+/**
+ * Every `svc:policy` claim across the credential's subjects. An ARRAY value is
+ * FLATTENED — each element is a separate policy claim (matching how the RDF lowering
+ * emits one `svc:policy` quad per array item) — so an array is NEVER mistaken for an
+ * embedded policy object, and a multi-item array is caught as multiple policies.
+ */
 function policyClaimsOf(vc: VerifiableCredential): JsonValue[] {
   const subjects = Array.isArray(vc.credentialSubject)
     ? vc.credentialSubject
@@ -154,7 +159,9 @@ function policyClaimsOf(vc: VerifiableCredential): JsonValue[] {
   for (const s of subjects) {
     if (s === null || typeof s !== "object") continue;
     const value = s[SVC_POLICY];
-    if (value !== undefined) out.push(value);
+    if (value === undefined) continue;
+    if (Array.isArray(value)) out.push(...value);
+    else out.push(value);
   }
   return out;
 }
