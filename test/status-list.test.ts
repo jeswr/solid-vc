@@ -359,3 +359,64 @@ describe("roborev regression — status read is scoped to the SIGNED graph", () 
     expect(result.errors.map((e) => e.code)).toContain("REVOKED");
   });
 });
+
+describe("roborev regressions — gate order + revocation-store fail-closed", () => {
+  it("does NOT dereference the status list when the credential's CORE gates fail", async () => {
+    const key = await issuerKey();
+    const attackerKey = await issuerKey(); // same vm, different keypair → INVALID_SIGNATURE
+    const hop = await signedHop(key, REVOCATION_ENTRY);
+    let fetched = false;
+    const spy: FetchPort = async () => {
+      fetched = true;
+      return response("", 500);
+    };
+    const result = await verifyCredential(hop, {
+      resolveKey: keyResolver(attackerKey),
+      isControlledBy: prefixControlledBy,
+      fetch: spy,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
+    expect(fetched).toBe(false); // an unverified credential never triggers an outbound fetch
+  });
+
+  it("fails closed (STATUS_RETRIEVAL_ERROR) when revocationStore.has throws", async () => {
+    const key = await issuerKey();
+    const hop = await signedHop(key, REVOCATION_ENTRY);
+    const store: RevocationStore = {
+      has: () => {
+        throw new Error("store unavailable");
+      },
+      add: () => {},
+    };
+    const list = await signedStatusList({ key, encodedList: encodeList([]) });
+    const result = await verifyCredential(hop, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+      revocationStore: store,
+      fetch: fakeFetch({ [LIST_URL]: list }),
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("STATUS_RETRIEVAL_ERROR");
+  });
+
+  it("still returns REVOKED when revocationStore.add throws (best-effort persistence)", async () => {
+    const key = await issuerKey();
+    const hop = await signedHop(key, REVOCATION_ENTRY);
+    const store: RevocationStore = {
+      has: () => false,
+      add: () => {
+        throw new Error("store write failed");
+      },
+    };
+    const list = await signedStatusList({ key, encodedList: encodeList([REVOKED_INDEX]) });
+    const result = await verifyCredential(hop, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+      revocationStore: store,
+      fetch: fakeFetch({ [LIST_URL]: list }),
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("REVOKED");
+  });
+});
