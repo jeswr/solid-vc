@@ -74,12 +74,15 @@ const RUNTIME_SURFACE: ReadonlyArray<readonly [string, string]> = [
   ["parseAndVerifyCredential", "function"],
   ["parseCredentialRdf", "function"],
   ["prefixControlledBy", "function"],
+  ["presentationToRdf", "function"],
   ["proofOptionsQuads", "function"],
   ["resolveBoundPolicy", "function"],
   ["serialize", "function"],
+  ["signPresentation", "function"],
   ["signedCredentialToRdf", "function"],
   ["signedCredentialToTurtle", "function"],
   ["verifyCredential", "function"],
+  ["verifyPresentation", "function"],
   ["wrapVc", "function"],
 ];
 
@@ -107,11 +110,13 @@ const TYPE_NAMES: readonly string[] = [
   "ParsedVerification",
   "PolicyBindingResult",
   "Presentation",
+  "PresentationVerificationResult",
   "ProofSignOptions",
   "ProofSuite",
   "ProofVerifyOptions",
   "RelatedResource",
   "RevocationStore",
+  "SignPresentationOptions",
   "SuiteKeyType",
   "VerifiableCredential",
   "VerifiablePresentation",
@@ -120,6 +125,7 @@ const TYPE_NAMES: readonly string[] = [
   "VerificationResult",
   "VerifyCredentialOptions",
   "VerifyOptions",
+  "VerifyPresentationOptions",
 ];
 
 /**

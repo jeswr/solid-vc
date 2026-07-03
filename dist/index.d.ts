@@ -48,6 +48,7 @@ export { type IssueInput, issue, issueAgentAuthorization } from "./issue.js";
 export { cryptosuiteForKeyType, exportPrivateJwk, exportPublicJwk, generateKeyPairForSuite, importKeyPair, importPublicKey, type SuiteKeyType, } from "./keys.js";
 export { base58btcDecode, base58btcEncode } from "./multibase.js";
 export { type BoundPolicy, type PolicyBindingResult, resolveBoundPolicy, } from "./policy-binding.js";
+export { type PresentationVerificationResult, presentationToRdf, type SignPresentationOptions, signPresentation, type VerifyPresentationOptions, verifyPresentation, } from "./presentation.js";
 export { DataIntegritySuite, defaultSuiteRegistry, type ProofSignOptions, type ProofSuite, type ProofVerifyOptions, proofOptionsQuads, SuiteRegistry, } from "./proof.js";
 export { serialize } from "./serialize.js";
 export type { AgentAuthorization, Credential, CredentialStatus, CredentialSubject, DataIntegrityProof, IssueOptions, JsonValue, KeyPair, Presentation, RelatedResource, RevocationStore, VerifiableCredential, VerifiablePresentation, VerificationError, VerificationErrorCode, VerificationResult, VerifyOptions, } from "./types.js";

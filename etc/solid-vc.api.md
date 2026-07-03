@@ -130,8 +130,10 @@ export function dataIntegrityHash(documentQuads: readonly Quad[], proofOptionsQu
 
 // @public
 export interface DataIntegrityProof {
+    readonly challenge?: string;
     readonly created?: string;
     readonly cryptosuite: string;
+    readonly domain?: string;
     readonly proofPurpose: string;
     readonly proofValue: string;
     readonly type: "DataIntegrityProof";
@@ -264,6 +266,17 @@ export class PresentationNode extends TermWrapper {
 }
 
 // @public
+export function presentationToRdf(presentation: Presentation): Quad[];
+
+// @public
+export interface PresentationVerificationResult {
+    readonly credentialResults: readonly VerificationResult[];
+    readonly errors: readonly VerificationError[];
+    readonly holder?: string;
+    readonly verified: boolean;
+}
+
+// @public
 export class ProofNode extends TermWrapper {
     // (undocumented)
     get createds(): Set<TermWrapper>;
@@ -284,7 +297,9 @@ export function proofOptionsQuads(proof: Omit<DataIntegrityProof, "proofValue">)
 
 // @public
 export interface ProofSignOptions {
+    readonly challenge?: string;
     readonly created: Date;
+    readonly domain?: string;
     readonly key: unknown;
     readonly proofPurpose: string;
 }
@@ -328,6 +343,16 @@ export function signedCredentialToRdf(vc: VerifiableCredential): Quad[];
 
 // @public
 export function signedCredentialToTurtle(vc: VerifiableCredential, format?: string): Promise<string>;
+
+// @public
+export function signPresentation(presentation: Presentation, key: KeyPair | unknown, options?: SignPresentationOptions): Promise<VerifiablePresentation>;
+
+// @public
+export interface SignPresentationOptions extends IssueOptions {
+    readonly challenge?: string;
+    readonly domain?: string;
+    readonly suite?: ProofSuite;
+}
 
 // @public
 export type SuiteKeyType = "Ed25519" | "P-256";
@@ -375,7 +400,7 @@ export interface VerificationError {
 }
 
 // @public
-export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR" | "POLICY_INTEGRITY";
+export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR" | "POLICY_INTEGRITY" | "CHALLENGE_MISMATCH" | "DOMAIN_MISMATCH" | "HOLDER_UNVERIFIED";
 
 // @public
 export interface VerificationResult {
@@ -402,6 +427,15 @@ export interface VerifyOptions {
     readonly now?: Date;
     readonly revocationStore?: RevocationStore;
     readonly trustedIssuers?: readonly string[];
+}
+
+// @public
+export function verifyPresentation(vp: VerifiablePresentation, options: VerifyPresentationOptions): Promise<PresentationVerificationResult>;
+
+// @public
+export interface VerifyPresentationOptions extends VerifyCredentialOptions {
+    readonly challenge?: string;
+    readonly domain?: string;
 }
 
 // @public

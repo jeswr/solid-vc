@@ -102,6 +102,10 @@ export const SEC_PROOF_VALUE = `${SEC}proofValue` as const;
 export const SEC_VERIFICATION_METHOD = `${SEC}verificationMethod` as const;
 /** `sec:proofPurpose` — why the proof was created (`assertionMethod`, …). */
 export const SEC_PROOF_PURPOSE = `${SEC}proofPurpose` as const;
+/** `sec:challenge` — a presentation proof's anti-replay challenge (bound under the signature). */
+export const SEC_CHALLENGE = `${SEC}challenge` as const;
+/** `sec:domain` — a presentation proof's intended relying-party domain (bound under the signature). */
+export const SEC_DOMAIN = `${SEC}domain` as const;
 /** The dateTime the proof was created (Data Integrity uses `dc:created`). */
 export const DC_CREATED = "http://purl.org/dc/terms/created" as const;
 

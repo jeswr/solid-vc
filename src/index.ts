@@ -83,6 +83,15 @@ export {
   type PolicyBindingResult,
   resolveBoundPolicy,
 } from "./policy-binding.js";
+// --- verifiable presentations (challenge/domain + holder binding) ----------
+export {
+  type PresentationVerificationResult,
+  presentationToRdf,
+  type SignPresentationOptions,
+  signPresentation,
+  type VerifyPresentationOptions,
+  verifyPresentation,
+} from "./presentation.js";
 // --- the pluggable proof-suite seam ----------------------------------------
 export {
   DataIntegritySuite,

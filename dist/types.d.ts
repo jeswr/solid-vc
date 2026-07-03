@@ -142,6 +142,16 @@ export interface DataIntegrityProof {
     readonly proofPurpose: string;
     /** When the proof was created (ISO-8601 dateTime). */
     readonly created?: string;
+    /**
+     * A presentation proof's anti-replay challenge (Data Integrity §"challenge"). Bound
+     * under the signature; a verifier requires it to equal the challenge it issued.
+     */
+    readonly challenge?: string;
+    /**
+     * A presentation proof's intended relying-party `domain` (Data Integrity §"domain").
+     * Bound under the signature; a verifier requires it to equal its own domain.
+     */
+    readonly domain?: string;
     /** The multibase-encoded signature octets. */
     readonly proofValue: string;
 }
@@ -201,7 +211,7 @@ export interface VerificationError {
     readonly message: string;
 }
 /** The closed set of verification failure categories. */
-export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR" | "POLICY_INTEGRITY";
+export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR" | "POLICY_INTEGRITY" | "CHALLENGE_MISMATCH" | "DOMAIN_MISMATCH" | "HOLDER_UNVERIFIED";
 /** Options shared by the verification entrypoints. */
 export interface VerifyOptions {
     /** The instant to evaluate validity against (default `new Date()`). Injectable for tests. */

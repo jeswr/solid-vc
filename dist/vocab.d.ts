@@ -74,6 +74,10 @@ export declare const SEC_PROOF_VALUE: "https://w3id.org/security#proofValue";
 export declare const SEC_VERIFICATION_METHOD: "https://w3id.org/security#verificationMethod";
 /** `sec:proofPurpose` — why the proof was created (`assertionMethod`, …). */
 export declare const SEC_PROOF_PURPOSE: "https://w3id.org/security#proofPurpose";
+/** `sec:challenge` — a presentation proof's anti-replay challenge (bound under the signature). */
+export declare const SEC_CHALLENGE: "https://w3id.org/security#challenge";
+/** `sec:domain` — a presentation proof's intended relying-party domain (bound under the signature). */
+export declare const SEC_DOMAIN: "https://w3id.org/security#domain";
 /** The dateTime the proof was created (Data Integrity uses `dc:created`). */
 export declare const DC_CREATED: "http://purl.org/dc/terms/created";
 /**

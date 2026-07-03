@@ -24,7 +24,9 @@ import { base58btcDecode, base58btcEncode } from "./multibase.js";
 import type { DataIntegrityProof, KeyPair } from "./types.js";
 import {
   DC_CREATED,
+  SEC_CHALLENGE,
   SEC_CRYPTOSUITE,
+  SEC_DOMAIN,
   SEC_PROOF_PURPOSE,
   SEC_VERIFICATION_METHOD,
 } from "./vocab.js";
@@ -68,6 +70,10 @@ export interface ProofSignOptions {
   readonly proofPurpose: string;
   /** The proof `created` timestamp. */
   readonly created: Date;
+  /** A presentation proof's anti-replay challenge (bound under the signature). */
+  readonly challenge?: string;
+  /** A presentation proof's intended relying-party domain (bound under the signature). */
+  readonly domain?: string;
 }
 
 /** Inputs to {@link ProofSuite.verify}. */
@@ -127,6 +133,9 @@ export function proofOptionsQuads(proof: Omit<DataIntegrityProof, "proofValue">)
   if (proof.created !== undefined) {
     b.addLiteral(node, DC_CREATED, proof.created, "http://www.w3.org/2001/XMLSchema#dateTime");
   }
+  // Presentation proofs bind challenge + domain under the signature (anti-replay).
+  if (proof.challenge !== undefined) b.addLiteral(node, SEC_CHALLENGE, proof.challenge);
+  if (proof.domain !== undefined) b.addLiteral(node, SEC_DOMAIN, proof.domain);
   return b.quads();
 }
 
@@ -185,6 +194,8 @@ export class DataIntegritySuite implements ProofSuite {
       verificationMethod: key.verificationMethod,
       proofPurpose: options.proofPurpose,
       created,
+      ...(options.challenge !== undefined ? { challenge: options.challenge } : {}),
+      ...(options.domain !== undefined ? { domain: options.domain } : {}),
     };
     const hash = await dataIntegrityHash(documentQuads, proofOptionsQuads(optionsNoValue));
     const algorithm = algorithmFor(this.cryptosuite);
@@ -218,6 +229,8 @@ export class DataIntegritySuite implements ProofSuite {
       verificationMethod: proof.verificationMethod,
       proofPurpose: proof.proofPurpose,
       ...(proof.created !== undefined ? { created: proof.created } : {}),
+      ...(proof.challenge !== undefined ? { challenge: proof.challenge } : {}),
+      ...(proof.domain !== undefined ? { domain: proof.domain } : {}),
     };
     const hash = await dataIntegrityHash(documentQuads, proofOptionsQuads(optionsNoValue));
     const algorithm = algorithmFor(this.cryptosuite);

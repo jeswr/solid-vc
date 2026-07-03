@@ -31,6 +31,10 @@ export interface ProofSignOptions {
     readonly proofPurpose: string;
     /** The proof `created` timestamp. */
     readonly created: Date;
+    /** A presentation proof's anti-replay challenge (bound under the signature). */
+    readonly challenge?: string;
+    /** A presentation proof's intended relying-party domain (bound under the signature). */
+    readonly domain?: string;
 }
 /** Inputs to {@link ProofSuite.verify}. */
 export interface ProofVerifyOptions {

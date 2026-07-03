@@ -160,6 +160,16 @@ export interface DataIntegrityProof {
   readonly proofPurpose: string;
   /** When the proof was created (ISO-8601 dateTime). */
   readonly created?: string;
+  /**
+   * A presentation proof's anti-replay challenge (Data Integrity §"challenge"). Bound
+   * under the signature; a verifier requires it to equal the challenge it issued.
+   */
+  readonly challenge?: string;
+  /**
+   * A presentation proof's intended relying-party `domain` (Data Integrity §"domain").
+   * Bound under the signature; a verifier requires it to equal its own domain.
+   */
+  readonly domain?: string;
   /** The multibase-encoded signature octets. */
   readonly proofValue: string;
 }
@@ -239,7 +249,10 @@ export type VerificationErrorCode =
   | "REVOKED" // a status-list revocation bit is set for this credential
   | "SUSPENDED" // a status-list suspension bit is set for this credential
   | "STATUS_RETRIEVAL_ERROR" // the status list is unavailable/invalid → fail-closed deny
-  | "POLICY_INTEGRITY"; // the bound policy is a bare IRI, or its digest did not verify
+  | "POLICY_INTEGRITY" // the bound policy is a bare IRI, or its digest did not verify
+  | "CHALLENGE_MISMATCH" // a presentation proof's challenge != the expected one
+  | "DOMAIN_MISMATCH" // a presentation proof's domain != the expected one
+  | "HOLDER_UNVERIFIED"; // the presenter did not prove control of the credential's subject/agent
 
 /** Options shared by the verification entrypoints. */
 export interface VerifyOptions {

@@ -206,6 +206,8 @@ var SEC_CRYPTOSUITE = `${SEC}cryptosuite`;
 var SEC_PROOF_VALUE = `${SEC}proofValue`;
 var SEC_VERIFICATION_METHOD = `${SEC}verificationMethod`;
 var SEC_PROOF_PURPOSE = `${SEC}proofPurpose`;
+var SEC_CHALLENGE = `${SEC}challenge`;
+var SEC_DOMAIN = `${SEC}domain`;
 var DC_CREATED = "http://purl.org/dc/terms/created";
 var STATUS = "https://www.w3.org/ns/credentials/status#";
 var STATUS_LIST_ENTRY = `${STATUS}BitstringStatusListEntry`;
@@ -801,6 +803,8 @@ function proofOptionsQuads(proof) {
   if (proof.created !== void 0) {
     b.addLiteral(node, DC_CREATED, proof.created, "http://www.w3.org/2001/XMLSchema#dateTime");
   }
+  if (proof.challenge !== void 0) b.addLiteral(node, SEC_CHALLENGE, proof.challenge);
+  if (proof.domain !== void 0) b.addLiteral(node, SEC_DOMAIN, proof.domain);
   return b.quads();
 }
 function purposeIri2(purpose) {
@@ -833,7 +837,9 @@ var DataIntegritySuite = class {
       cryptosuite: this.cryptosuite,
       verificationMethod: key.verificationMethod,
       proofPurpose: options.proofPurpose,
-      created
+      created,
+      ...options.challenge !== void 0 ? { challenge: options.challenge } : {},
+      ...options.domain !== void 0 ? { domain: options.domain } : {}
     };
     const hash = await dataIntegrityHash(documentQuads, proofOptionsQuads(optionsNoValue));
     const algorithm = algorithmFor(this.cryptosuite);
@@ -858,7 +864,9 @@ var DataIntegritySuite = class {
       cryptosuite: proof.cryptosuite,
       verificationMethod: proof.verificationMethod,
       proofPurpose: proof.proofPurpose,
-      ...proof.created !== void 0 ? { created: proof.created } : {}
+      ...proof.created !== void 0 ? { created: proof.created } : {},
+      ...proof.challenge !== void 0 ? { challenge: proof.challenge } : {},
+      ...proof.domain !== void 0 ? { domain: proof.domain } : {}
     };
     const hash = await dataIntegrityHash(documentQuads, proofOptionsQuads(optionsNoValue));
     const algorithm = algorithmFor(this.cryptosuite);
@@ -1058,6 +1066,9 @@ function multibaseMatches(octets, digestMultibase) {
 function integrityError(message) {
   return { code: "POLICY_INTEGRITY", message };
 }
+
+// src/presentation.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/status-list.ts
 import { gunzipSync } from "node:zlib";
@@ -1512,6 +1523,116 @@ async function verifyCredential(vc, options) {
   }
   return errors.length === 0 ? { verified: true, errors: [], issuer } : { verified: false, errors, issuer };
 }
+
+// src/presentation.ts
+function presentationToRdf(presentation) {
+  const id = presentation.id ?? `urn:uuid:${randomUUID3()}`;
+  const subject = iriRef(id);
+  const b = new GraphBuilder();
+  b.addType(subject, VC_PRESENTATION);
+  if (presentation.holder !== void 0) {
+    b.addIri(subject, VC_HOLDER, presentation.holder);
+  }
+  for (const vc of presentation.verifiableCredential) {
+    if (typeof vc.id === "string" && vc.id.length > 0) {
+      b.addIri(subject, VC_VERIFIABLE_CREDENTIAL, vc.id);
+    }
+  }
+  return b.quads();
+}
+async function signPresentation(presentation, key, options = {}) {
+  const suite = options.suite ?? new DataIntegritySuite("eddsa-rdfc-2022");
+  const id = presentation.id ?? `urn:uuid:${randomUUID3()}`;
+  const withId = { ...presentation, id };
+  const proof = await suite.sign(presentationToRdf(withId), {
+    key,
+    proofPurpose: options.proofPurpose ?? "authentication",
+    created: options.created ?? /* @__PURE__ */ new Date(),
+    ...options.challenge !== void 0 ? { challenge: options.challenge } : {},
+    ...options.domain !== void 0 ? { domain: options.domain } : {}
+  });
+  return { ...withId, proof };
+}
+function proofsOf2(vp) {
+  const proof = vp.proof;
+  return Array.isArray(proof) ? [...proof] : [proof];
+}
+async function verifyPresentation(vp, options) {
+  if (vp === null || typeof vp !== "object" || !Array.isArray(vp.verifiableCredential) || vp.proof === void 0) {
+    return {
+      verified: false,
+      errors: [{ code: "MALFORMED", message: "not a well-formed presentation" }],
+      credentialResults: []
+    };
+  }
+  const errors = [];
+  const credentialResults = [];
+  for (const vc of vp.verifiableCredential) {
+    const result = await verifyCredential(vc, options);
+    credentialResults.push(result);
+    if (!result.verified) {
+      errors.push(...result.errors);
+    }
+  }
+  const holder = vp.holder;
+  if (typeof holder !== "string" || holder.length === 0) {
+    errors.push({ code: "HOLDER_UNVERIFIED", message: "presentation has no holder to bind" });
+    return { verified: false, errors, credentialResults };
+  }
+  const proofs = proofsOf2(vp);
+  if (proofs.length === 0) {
+    errors.push({ code: "NO_PROOF", message: "presentation carries no proof" });
+  }
+  for (const proof of proofs) {
+    if (options.challenge !== void 0 && proof.challenge !== options.challenge) {
+      errors.push({
+        code: "CHALLENGE_MISMATCH",
+        message: `proof.challenge "${proof.challenge}" != expected "${options.challenge}"`
+      });
+    }
+    if (options.domain !== void 0 && proof.domain !== options.domain) {
+      errors.push({
+        code: "DOMAIN_MISMATCH",
+        message: `proof.domain "${proof.domain}" != expected "${options.domain}"`
+      });
+    }
+  }
+  const registry = options.registry ?? defaultSuiteRegistry();
+  const controlledBy = resolveControlledBy(options, "authentication");
+  errors.push(
+    ...await verifyProofSet({
+      documentQuads: presentationToRdf(unsignedPresentation(vp)),
+      proofs,
+      issuer: holder,
+      registry,
+      controlledBy,
+      expectedPurpose: "authentication",
+      resolveKey: options.resolveKey
+    })
+  );
+  for (const vc of vp.verifiableCredential) {
+    if (!credentialNamesHolder(vc, holder)) {
+      errors.push({
+        code: "HOLDER_UNVERIFIED",
+        message: `holder ${holder} is neither the subject nor the authorized agent of a presented credential`
+      });
+    }
+  }
+  return errors.length === 0 ? { verified: true, errors: [], holder, credentialResults } : { verified: false, errors, holder, credentialResults };
+}
+function unsignedPresentation(vp) {
+  const { proof: _proof, ...rest } = vp;
+  return rest;
+}
+function credentialNamesHolder(vc, holder) {
+  const subjects = Array.isArray(vc.credentialSubject) ? vc.credentialSubject : [vc.credentialSubject];
+  for (const subject of subjects) {
+    if (subject.id === holder) return true;
+    const authorizes = subject[SVC_AUTHORIZES];
+    if (typeof authorizes === "string" && authorizes === holder) return true;
+  }
+  return false;
+}
 export {
   CredentialNode,
   DataIntegritySuite,
@@ -1547,12 +1668,15 @@ export {
   parseAndVerifyCredential,
   parseCredentialRdf,
   prefixControlledBy,
+  presentationToRdf,
   proofOptionsQuads,
   resolveBoundPolicy,
   serialize2 as serialize,
+  signPresentation,
   signedCredentialToRdf,
   signedCredentialToTurtle,
   verifyCredential,
+  verifyPresentation,
   wrapVc
 };
 //# sourceMappingURL=index.js.map
