@@ -1,3 +1,4 @@
+import { type ControlledByCheck } from "./controller.js";
 import type { ProofVerifyOptions, SuiteRegistry } from "./proof.js";
 import type { VerifiableCredential, VerificationResult, VerifyOptions } from "./types.js";
 /** Options for {@link verifyCredential}: the suite registry + the key resolver. */
@@ -15,12 +16,17 @@ export interface VerifyCredentialOptions extends VerifyOptions {
      */
     readonly resolveKey: ProofVerifyOptions["resolveKey"];
     /**
-     * Decide whether a `verificationMethod` IRI is controlled by `issuer`. Default:
-     * the method IRI must equal the issuer IRI or start with `<issuer>#` /
-     * `<issuer>/` (the common WebID `#key` / key-path convention). Override to consult
-     * a DID document / WebID profile controller relationship.
+     * Decide whether a `verificationMethod` IRI is controlled by `issuer` (may be
+     * async — the default resolves a document). When omitted, the default is:
+     *   - if {@link VerifyOptions.fetch} is provided → the DOCUMENT-RESOLVED check
+     *     ({@link documentResolvedControlledBy}) — the SAFE default that fetches the
+     *     issuer's own authoritative document and confirms it lists the method under
+     *     `sec:assertionMethod` / `sec:controller`;
+     *   - if NO `fetch` is provided → FAIL CLOSED (deny). The unsafe string-prefix
+     *     heuristic is NO LONGER the default; import `prefixControlledBy` to opt into
+     *     it explicitly (documented unsafe).
      */
-    readonly isControlledBy?: (verificationMethod: string, issuer: string) => boolean;
+    readonly isControlledBy?: ControlledByCheck;
 }
 /**
  * Verify a {@link VerifiableCredential}. Returns a {@link VerificationResult}

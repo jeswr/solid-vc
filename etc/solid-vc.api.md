@@ -38,6 +38,9 @@ export function buildAgentAuthorizationCredential(auth: AgentAuthorization): Cre
 export function canonicalNQuads(quads: readonly Quad[]): Promise<string>;
 
 // @public
+export type ControlledByCheck = (verificationMethod: string, issuer: string) => boolean | Promise<boolean>;
+
+// @public
 interface Credential_2 {
     readonly credentialSubject: CredentialSubject | readonly CredentialSubject[];
     readonly id?: string;
@@ -122,13 +125,30 @@ export class DataIntegritySuite implements ProofSuite {
 export function defaultSuiteRegistry(): SuiteRegistry;
 
 // @public
+export function documentResolvedControlledBy(fetch: FetchPort, expectedProofPurpose?: string): ControlledByCheck;
+
+// @public
 export function exportPrivateJwk(key: KeyPair): Promise<JWK>;
 
 // @public
 export function exportPublicJwk(key: KeyPair): Promise<JWK>;
 
 // @public
+export type FetchPort = (url: string) => Promise<HttpResponse>;
+
+// @public
 export function generateKeyPairForSuite(verificationMethod: string, type?: SuiteKeyType): Promise<KeyPair>;
+
+// @public
+export interface HttpResponse {
+    arrayBuffer(): Promise<ArrayBuffer>;
+    readonly headers: {
+        get(name: string): string | null;
+    };
+    readonly ok: boolean;
+    readonly status: number;
+    text(): Promise<string>;
+}
 
 // @public
 export function importKeyPair(verificationMethod: string, privateJwk: JWK): Promise<KeyPair>;
@@ -173,6 +193,9 @@ export interface KeyPair {
 
 // @public
 export function parseCredentialRdf(body: string, contentType?: string): Promise<DatasetCore>;
+
+// @public
+export function prefixControlledBy(verificationMethod: string, issuer: string): boolean;
 
 // @public
 export interface Presentation {
@@ -295,7 +318,7 @@ export function verifyCredential(vc: VerifiableCredential, options: VerifyCreden
 
 // @public
 export interface VerifyCredentialOptions extends VerifyOptions {
-    readonly isControlledBy?: (verificationMethod: string, issuer: string) => boolean;
+    readonly isControlledBy?: ControlledByCheck;
     readonly registry?: SuiteRegistry;
     readonly resolveKey: ProofVerifyOptions["resolveKey"];
 }
@@ -303,6 +326,7 @@ export interface VerifyCredentialOptions extends VerifyOptions {
 // @public
 export interface VerifyOptions {
     readonly expectedProofPurpose?: string;
+    readonly fetch?: FetchPort;
     readonly now?: Date;
     readonly trustedIssuers?: readonly string[];
 }

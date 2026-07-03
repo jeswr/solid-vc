@@ -43,6 +43,12 @@
  */
 
 export { canonicalNQuads, dataIntegrityHash } from "./canonicalize.js";
+// --- the issuer–key controller check (document-resolved; SSRF-guarded) ------
+export {
+  type ControlledByCheck,
+  documentResolvedControlledBy,
+  prefixControlledBy,
+} from "./controller.js";
 // --- data model + RDF ------------------------------------------------------
 export {
   agentAuthorizationFromRdf,
@@ -54,6 +60,8 @@ export {
   credentialToTurtle,
   parseCredentialRdf,
 } from "./credential.js";
+// --- the injectable network port (inject an SSRF-guarded fetch) -------------
+export type { FetchPort, HttpResponse } from "./fetch-port.js";
 // --- sign / verify ---------------------------------------------------------
 export { type IssueInput, issue, issueAgentAuthorization } from "./issue.js";
 // --- keys ------------------------------------------------------------------

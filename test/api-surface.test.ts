@@ -63,6 +63,7 @@ const RUNTIME_SURFACE: ReadonlyArray<readonly [string, string]> = [
   ["cryptosuiteForKeyType", "function"],
   ["dataIntegrityHash", "function"],
   ["defaultSuiteRegistry", "function"],
+  ["documentResolvedControlledBy", "function"],
   ["exportPrivateJwk", "function"],
   ["exportPublicJwk", "function"],
   ["generateKeyPairForSuite", "function"],
@@ -71,6 +72,7 @@ const RUNTIME_SURFACE: ReadonlyArray<readonly [string, string]> = [
   ["issue", "function"],
   ["issueAgentAuthorization", "function"],
   ["parseCredentialRdf", "function"],
+  ["prefixControlledBy", "function"],
   ["proofOptionsQuads", "function"],
   ["serialize", "function"],
   ["verifyCredential", "function"],
@@ -86,9 +88,12 @@ const VALUE_NAMES: readonly string[] = RUNTIME_SURFACE.map(([n]) => n)
 // Type-only export names (interfaces / type aliases — erase at runtime). Sorted.
 const TYPE_NAMES: readonly string[] = [
   "AgentAuthorization",
+  "ControlledByCheck",
   "Credential",
   "CredentialSubject",
   "DataIntegrityProof",
+  "FetchPort",
+  "HttpResponse",
   "IssueInput",
   "IssueOptions",
   "JsonValue",

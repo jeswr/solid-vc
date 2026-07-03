@@ -41,7 +41,9 @@
  * @packageDocumentation
  */
 export { canonicalNQuads, dataIntegrityHash } from "./canonicalize.js";
+export { type ControlledByCheck, documentResolvedControlledBy, prefixControlledBy, } from "./controller.js";
 export { agentAuthorizationFromRdf, buildAgentAuthorizationCredential, credentialFromRdf, credentialMetaFromNode, credentialToJsonLd, credentialToRdf, credentialToTurtle, parseCredentialRdf, } from "./credential.js";
+export type { FetchPort, HttpResponse } from "./fetch-port.js";
 export { type IssueInput, issue, issueAgentAuthorization } from "./issue.js";
 export { cryptosuiteForKeyType, exportPrivateJwk, exportPublicJwk, generateKeyPairForSuite, importKeyPair, importPublicKey, type SuiteKeyType, } from "./keys.js";
 export { base58btcDecode, base58btcEncode } from "./multibase.js";

@@ -6,11 +6,18 @@
 // never thrown.
 
 import { describe, expect, it } from "vitest";
+import { prefixControlledBy } from "../src/controller.js";
 import { issue, issueAgentAuthorization } from "../src/issue.js";
 import { DataIntegritySuite } from "../src/proof.js";
 import type { Credential, VerifiableCredential } from "../src/types.js";
 import { verifyCredential } from "../src/verify.js";
 import { ACL_READ, AGENT, expectDefined, ISSUER, issuerKey, keyResolver } from "./helpers.js";
+
+// These pre-existing gate tests concern signature / expiry / purpose / trust — NOT
+// issuer-key binding. Under the new fail-closed controller default they must opt into
+// the (now non-default, documented-unsafe) prefix heuristic explicitly to keep testing
+// their actual concern. The document-resolved default has its own dedicated suite in
+// test/controller.test.ts.
 
 const AUTH = {
   principal: ISSUER,
@@ -24,7 +31,10 @@ describe("happy path", () => {
   it("verifies a freshly issued EdDSA agent-authorization credential", async () => {
     const key = await issuerKey("Ed25519");
     const vc = await issueAgentAuthorization(AUTH, key);
-    const result = await verifyCredential(vc, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.issuer).toBe(ISSUER);
@@ -35,7 +45,10 @@ describe("happy path", () => {
     const suite = new DataIntegritySuite("ecdsa-rdfc-2019");
     const vc = await issueAgentAuthorization(AUTH, key, { suite });
     expect(vc.proof.cryptosuite).toBe("ecdsa-rdfc-2019");
-    const result = await verifyCredential(vc, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(true);
   });
 
@@ -46,7 +59,10 @@ describe("happy path", () => {
       credentialSubject: { id: "https://carol.example/#me", over18: true },
     };
     const vc = await issue({ credential: cred, key });
-    const result = await verifyCredential(vc, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(true);
   });
 });
@@ -66,7 +82,10 @@ describe("tamper detection (INVALID_SIGNATURE)", () => {
         "https://w3id.org/jeswr/solid-vc#action": "http://www.w3.org/ns/auth/acl#Write",
       },
     };
-    const result = await verifyCredential(tampered, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(tampered, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(false);
     expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
   });
@@ -89,7 +108,10 @@ describe("tamper detection (INVALID_SIGNATURE)", () => {
     const vc = await issueAgentAuthorization(AUTH, key);
     const flipped = `${vc.proof.proofValue.slice(0, -2)}${vc.proof.proofValue.slice(-2) === "11" ? "22" : "11"}`;
     const tampered: VerifiableCredential = { ...vc, proof: { ...vc.proof, proofValue: flipped } };
-    const result = await verifyCredential(tampered, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(tampered, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(false);
   });
 
@@ -100,7 +122,10 @@ describe("tamper detection (INVALID_SIGNATURE)", () => {
       ...vc,
       proof: { ...vc.proof, proofValue: "not a multibase string!!!" },
     };
-    const result = await verifyCredential(tampered, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(tampered, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(false);
     expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
   });
@@ -109,7 +134,10 @@ describe("tamper detection (INVALID_SIGNATURE)", () => {
     const key = await issuerKey();
     const attackerKey = await issuerKey(); // same vm IRI, different keypair
     const vc = await issueAgentAuthorization(AUTH, key);
-    const result = await verifyCredential(vc, { resolveKey: keyResolver(attackerKey) });
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(attackerKey),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(false);
     expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
   });
@@ -124,6 +152,7 @@ describe("expiry + validity window", () => {
     );
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       now: new Date("2026-01-01T00:00:00.000Z"),
     });
     expect(result.verified).toBe(false);
@@ -138,6 +167,7 @@ describe("expiry + validity window", () => {
     );
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       now: new Date("2026-06-15T00:00:00.000Z"),
     });
     expect(result.verified).toBe(true);
@@ -151,6 +181,7 @@ describe("expiry + validity window", () => {
     );
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       now: new Date("2026-01-01T00:00:00.000Z"),
     });
     expect(result.verified).toBe(false);
@@ -164,7 +195,10 @@ describe("issuer binding (ISSUER_MISMATCH)", () => {
     // sign with a method that is NOT a fragment/path of the issuer
     const foreignKey = { ...key, verificationMethod: "https://mallory.example/keys#k" };
     const vc = await issueAgentAuthorization(AUTH, foreignKey);
-    const result = await verifyCredential(vc, { resolveKey: keyResolver(foreignKey) });
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(foreignKey),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(false);
     expect(result.errors.map((e) => e.code)).toContain("ISSUER_MISMATCH");
   });
@@ -172,7 +206,10 @@ describe("issuer binding (ISSUER_MISMATCH)", () => {
   it("accepts the issuer IRI itself as a verificationMethod", async () => {
     const key = { ...(await issuerKey()), verificationMethod: ISSUER };
     const vc = await issueAgentAuthorization(AUTH, key);
-    const result = await verifyCredential(vc, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(true);
   });
 
@@ -195,6 +232,7 @@ describe("proof purpose (PROOF_PURPOSE_MISMATCH)", () => {
     });
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       expectedProofPurpose: "assertionMethod",
     });
     expect(result.verified).toBe(false);
@@ -208,6 +246,7 @@ describe("proof purpose (PROOF_PURPOSE_MISMATCH)", () => {
     });
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       expectedProofPurpose: "authentication",
     });
     expect(result.verified).toBe(true);
@@ -222,7 +261,10 @@ describe("cryptosuite + trust + structural gates", () => {
       ...vc,
       proof: { ...vc.proof, cryptosuite: "totally-made-up-2099" },
     };
-    const result = await verifyCredential(forged, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(forged, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(false);
     expect(result.errors.map((e) => e.code)).toContain("UNKNOWN_CRYPTOSUITE");
   });
@@ -232,6 +274,7 @@ describe("cryptosuite + trust + structural gates", () => {
     const vc = await issueAgentAuthorization(AUTH, key);
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       trustedIssuers: ["https://someone-else.example/#me"],
     });
     expect(result.verified).toBe(false);
@@ -243,6 +286,7 @@ describe("cryptosuite + trust + structural gates", () => {
     const vc = await issueAgentAuthorization(AUTH, key);
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       trustedIssuers: [ISSUER],
     });
     expect(result.verified).toBe(true);
@@ -274,6 +318,7 @@ describe("cryptosuite + trust + structural gates", () => {
     );
     const result = await verifyCredential(vc, {
       resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
       now: new Date("2026-01-01T00:00:00.000Z"),
       trustedIssuers: ["https://other.example/#me"],
     });
@@ -294,7 +339,10 @@ describe("multi-proof credentials", () => {
       ...vc,
       proof: [single, { ...single, cryptosuite: "unknown-2099" }],
     };
-    const result = await verifyCredential(multi, { resolveKey: keyResolver(key) });
+    const result = await verifyCredential(multi, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(false);
     expect(result.errors.map((e) => e.code)).toContain("UNKNOWN_CRYPTOSUITE");
   });

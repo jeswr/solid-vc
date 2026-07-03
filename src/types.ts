@@ -5,6 +5,8 @@
 // RDF (via the typed wrappers) and the parser reads back — never the RDF terms
 // themselves (those stay in src/wrappers.ts / src/vocab.ts).
 
+import type { FetchPort } from "./fetch-port.js";
+
 /** A JSON value (for arbitrary `credentialSubject` claims that round-trip as RDF). */
 export type JsonValue =
   | string
@@ -177,6 +179,15 @@ export interface VerifyOptions {
   readonly trustedIssuers?: readonly string[];
   /** The expected `proofPurpose` (default `assertionMethod`). */
   readonly expectedProofPurpose?: string;
+  /**
+   * The injected SSRF-guarded network port for the gates that must dereference a
+   * remote resource — the document-resolved issuer–key controller check, the
+   * Bitstring Status List v1.0 status gate, and the by-reference policy digest
+   * check. Inject `@jeswr/guarded-fetch/node`'s `nodeGuardedFetch` (see
+   * `@jeswr/solid-vc/node`). When ABSENT, those gates FAIL CLOSED (deny) rather than
+   * silently skipping — a skipped revocation/controller check is an accept.
+   */
+  readonly fetch?: FetchPort;
 }
 
 /** Options for issuing/signing. */

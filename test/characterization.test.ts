@@ -24,6 +24,7 @@
 import { importJWK, type JWK } from "jose";
 import { describe, expect, it } from "vitest";
 import { canonicalNQuads, dataIntegrityHash } from "../src/canonicalize.js";
+import { prefixControlledBy } from "../src/controller.js";
 import {
   agentAuthorizationFromRdf,
   buildAgentAuthorizationCredential,
@@ -172,6 +173,7 @@ describe("characterization — Ed25519 signed proof bytes are pinned", () => {
     });
     const result = await verifyCredential(vc, {
       resolveKey: resolveFixed(key.publicKey),
+      isControlledBy: prefixControlledBy,
       now: new Date("2026-06-01T00:00:00.000Z"),
     });
     expect(result.verified).toBe(true);
@@ -192,7 +194,10 @@ describe("characterization — P-256 (non-deterministic sig) round-trip is stabl
     });
     const proof = Array.isArray(vc.proof) ? vc.proof[0] : vc.proof;
     expect(proof?.cryptosuite).toBe("ecdsa-rdfc-2019");
-    const result = await verifyCredential(vc, { resolveKey: resolveFixed(key.publicKey) });
+    const result = await verifyCredential(vc, {
+      resolveKey: resolveFixed(key.publicKey),
+      isControlledBy: prefixControlledBy,
+    });
     expect(result.verified).toBe(true);
   });
 });

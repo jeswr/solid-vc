@@ -4,6 +4,7 @@
 // still verify a signature made by the original private key (the persistence path).
 
 import { describe, expect, it } from "vitest";
+import { prefixControlledBy } from "../src/controller.js";
 import { issueAgentAuthorization } from "../src/issue.js";
 import {
   cryptosuiteForKeyType,
@@ -50,6 +51,7 @@ describe("JWK round-trip", () => {
     const reimported = await importPublicKey(pubJwk);
     const result = await verifyCredential(vc, {
       resolveKey: (vm) => (vm === VERIFICATION_METHOD ? reimported : undefined),
+      isControlledBy: prefixControlledBy,
     });
     expect(result.verified).toBe(true);
   });
@@ -64,6 +66,7 @@ describe("JWK round-trip", () => {
     const pub = await importPublicKey(await exportPublicJwk(key));
     const result = await verifyCredential(vc, {
       resolveKey: (vm) => (vm === VERIFICATION_METHOD ? pub : undefined),
+      isControlledBy: prefixControlledBy,
     });
     expect(result.verified).toBe(true);
   });

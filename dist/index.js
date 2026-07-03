@@ -21,9 +21,6 @@ async function dataIntegrityHash(documentQuads, proofOptionsQuads2) {
   return out;
 }
 
-// src/credential.ts
-import { randomUUID } from "node:crypto";
-
 // node_modules/@jeswr/fetch-rdf/dist/parse.js
 import contentType from "content-type";
 import { Store, StreamParser } from "n3";
@@ -178,32 +175,6 @@ function waitForDrain(parser) {
   });
 }
 
-// node_modules/@jeswr/rdf-serialize/dist/serialize.js
-import { Writer } from "n3";
-var DEFAULT_FORMAT = "text/turtle";
-function serialize(quads, options) {
-  const format = options?.format ?? DEFAULT_FORMAT;
-  const prefixes = options?.prefixes ?? {};
-  const emptyAsEmptyString = options?.emptyAsEmptyString ?? true;
-  if (emptyAsEmptyString && quads.length === 0) {
-    return Promise.resolve("");
-  }
-  return new Promise((resolve, reject) => {
-    const writer = new Writer({ format, prefixes });
-    writer.addQuads(quads);
-    writer.end((error, result) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve(result);
-      }
-    });
-  });
-}
-function legacySerialize(quads, format = DEFAULT_FORMAT, prefixes = {}, emptyAsEmptyString = true) {
-  return serialize(quads, { format, prefixes, emptyAsEmptyString });
-}
-
 // src/vocab.ts
 var VC = "https://www.w3.org/2018/credentials#";
 var VC_V2_CONTEXT = "https://www.w3.org/ns/credentials/v2";
@@ -252,6 +223,85 @@ var SVC_INLINE_CONTEXT = [
   VC_V2_CONTEXT,
   SVC_TERMS
 ];
+
+// src/controller.ts
+function isHttpIri(value) {
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+function documentUrl(iri) {
+  const url = new URL(iri);
+  url.hash = "";
+  return url.toString();
+}
+function relationshipIriForPurpose(purpose) {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(purpose) ? purpose : `${SEC}${purpose}`;
+}
+function prefixControlledBy(verificationMethod, issuer) {
+  if (verificationMethod === issuer) return true;
+  return verificationMethod.startsWith(`${issuer}#`) || verificationMethod.startsWith(`${issuer}/`);
+}
+function documentResolvedControlledBy(fetch, expectedProofPurpose = "assertionMethod") {
+  const relationship = relationshipIriForPurpose(expectedProofPurpose);
+  return async (verificationMethod, issuer) => {
+    if (!isHttpIri(verificationMethod) || !isHttpIri(issuer)) return false;
+    let dataset;
+    try {
+      const docUrl = documentUrl(issuer);
+      const response = await fetch(docUrl);
+      if (!response.ok) return false;
+      const body = await response.text();
+      const contentType2 = response.headers.get("content-type") ?? "text/turtle";
+      dataset = await parseRdf(body, contentType2, {
+        baseIRI: docUrl
+      });
+    } catch {
+      return false;
+    }
+    return documentAssertsRelationship(dataset, issuer, relationship, verificationMethod);
+  };
+}
+function documentAssertsRelationship(dataset, issuer, relationship, verificationMethod) {
+  for (const quad of dataset.match()) {
+    if (quad.subject.termType === "NamedNode" && quad.object.termType === "NamedNode" && quad.predicate.value === relationship && quad.subject.value === issuer && quad.object.value === verificationMethod) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// src/credential.ts
+import { randomUUID } from "node:crypto";
+
+// node_modules/@jeswr/rdf-serialize/dist/serialize.js
+import { Writer } from "n3";
+var DEFAULT_FORMAT = "text/turtle";
+function serialize(quads, options) {
+  const format = options?.format ?? DEFAULT_FORMAT;
+  const prefixes = options?.prefixes ?? {};
+  const emptyAsEmptyString = options?.emptyAsEmptyString ?? true;
+  if (emptyAsEmptyString && quads.length === 0) {
+    return Promise.resolve("");
+  }
+  return new Promise((resolve, reject) => {
+    const writer = new Writer({ format, prefixes });
+    writer.addQuads(quads);
+    writer.end((error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+}
+function legacySerialize(quads, format = DEFAULT_FORMAT, prefixes = {}, emptyAsEmptyString = true) {
+  return serialize(quads, { format, prefixes, emptyAsEmptyString });
+}
 
 // src/serialize.ts
 var PREFIXES = {
@@ -807,9 +857,12 @@ function algForJwk(jwk) {
 }
 
 // src/verify.ts
-function defaultControlledBy(verificationMethod, issuer) {
-  if (verificationMethod === issuer) return true;
-  return verificationMethod.startsWith(`${issuer}#`) || verificationMethod.startsWith(`${issuer}/`);
+function resolveControlledBy(options, expectedPurpose) {
+  if (options.isControlledBy !== void 0) return options.isControlledBy;
+  if (options.fetch !== void 0) {
+    return documentResolvedControlledBy(options.fetch, expectedPurpose);
+  }
+  return () => false;
 }
 function proofsOf(vc) {
   const proof = vc.proof;
@@ -824,7 +877,7 @@ async function verifyCredential(vc, options) {
   const registry = options.registry ?? defaultSuiteRegistry();
   const now = options.now ?? /* @__PURE__ */ new Date();
   const expectedPurpose = options.expectedProofPurpose ?? "assertionMethod";
-  const controlledBy = options.isControlledBy ?? defaultControlledBy;
+  const controlledBy = resolveControlledBy(options, expectedPurpose);
   if (vc === null || typeof vc !== "object" || typeof vc.issuer !== "string" || vc.issuer.length === 0 || vc.credentialSubject === void 0) {
     return {
       verified: false,
@@ -870,7 +923,13 @@ async function verifyCredential(vc, options) {
         message: `proofPurpose "${proof.proofPurpose}" != expected "${expectedPurpose}"`
       });
     }
-    if (!controlledBy(proof.verificationMethod, issuer)) {
+    let controlled;
+    try {
+      controlled = await controlledBy(proof.verificationMethod, issuer);
+    } catch {
+      controlled = false;
+    }
+    if (!controlled) {
       errors.push({
         code: "ISSUER_MISMATCH",
         message: `verificationMethod ${proof.verificationMethod} is not controlled by issuer ${issuer}`
@@ -921,6 +980,7 @@ export {
   cryptosuiteForKeyType,
   dataIntegrityHash,
   defaultSuiteRegistry,
+  documentResolvedControlledBy,
   exportPrivateJwk,
   exportPublicJwk,
   generateKeyPairForSuite,
@@ -929,6 +989,7 @@ export {
   issue,
   issueAgentAuthorization,
   parseCredentialRdf,
+  prefixControlledBy,
   proofOptionsQuads,
   serialize2 as serialize,
   verifyCredential,

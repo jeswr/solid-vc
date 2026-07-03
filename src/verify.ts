@@ -18,6 +18,7 @@
 // proofValue, a missing field — all become `verified: false` with a reason, never
 // a thrown exception or a silent accept.
 
+import { type ControlledByCheck, documentResolvedControlledBy } from "./controller.js";
 import { credentialToRdf } from "./credential.js";
 import type { ProofSuite, ProofVerifyOptions, SuiteRegistry } from "./proof.js";
 import { defaultSuiteRegistry } from "./proof.js";
@@ -45,18 +46,29 @@ export interface VerifyCredentialOptions extends VerifyOptions {
    */
   readonly resolveKey: ProofVerifyOptions["resolveKey"];
   /**
-   * Decide whether a `verificationMethod` IRI is controlled by `issuer`. Default:
-   * the method IRI must equal the issuer IRI or start with `<issuer>#` /
-   * `<issuer>/` (the common WebID `#key` / key-path convention). Override to consult
-   * a DID document / WebID profile controller relationship.
+   * Decide whether a `verificationMethod` IRI is controlled by `issuer` (may be
+   * async — the default resolves a document). When omitted, the default is:
+   *   - if {@link VerifyOptions.fetch} is provided → the DOCUMENT-RESOLVED check
+   *     ({@link documentResolvedControlledBy}) — the SAFE default that fetches the
+   *     issuer's own authoritative document and confirms it lists the method under
+   *     `sec:assertionMethod` / `sec:controller`;
+   *   - if NO `fetch` is provided → FAIL CLOSED (deny). The unsafe string-prefix
+   *     heuristic is NO LONGER the default; import `prefixControlledBy` to opt into
+   *     it explicitly (documented unsafe).
    */
-  readonly isControlledBy?: (verificationMethod: string, issuer: string) => boolean;
+  readonly isControlledBy?: ControlledByCheck;
 }
 
-/** Default issuer-binding check: the method is the issuer or a fragment/path of it. */
-function defaultControlledBy(verificationMethod: string, issuer: string): boolean {
-  if (verificationMethod === issuer) return true;
-  return verificationMethod.startsWith(`${issuer}#`) || verificationMethod.startsWith(`${issuer}/`);
+/** Select the controller check: explicit override → document-resolved (if fetch) → fail-closed. */
+function resolveControlledBy(
+  options: VerifyCredentialOptions,
+  expectedPurpose: string,
+): ControlledByCheck {
+  if (options.isControlledBy !== undefined) return options.isControlledBy;
+  if (options.fetch !== undefined) {
+    return documentResolvedControlledBy(options.fetch, expectedPurpose);
+  }
+  return () => false; // no override and no fetch → cannot resolve control → deny.
 }
 
 /** Normalise one-or-many proofs to an array. */
@@ -86,7 +98,7 @@ export async function verifyCredential(
   const registry = options.registry ?? defaultSuiteRegistry();
   const now = options.now ?? new Date();
   const expectedPurpose = options.expectedProofPurpose ?? "assertionMethod";
-  const controlledBy = options.isControlledBy ?? defaultControlledBy;
+  const controlledBy = resolveControlledBy(options, expectedPurpose);
 
   // 1. structural
   if (
@@ -151,8 +163,14 @@ export async function verifyCredential(
         message: `proofPurpose "${proof.proofPurpose}" != expected "${expectedPurpose}"`,
       });
     }
-    // 5. issuer binding
-    if (!controlledBy(proof.verificationMethod, issuer)) {
+    // 5. issuer binding (may resolve a controller document → await; fail-closed)
+    let controlled: boolean;
+    try {
+      controlled = await controlledBy(proof.verificationMethod, issuer);
+    } catch {
+      controlled = false;
+    }
+    if (!controlled) {
       errors.push({
         code: "ISSUER_MISMATCH",
         message: `verificationMethod ${proof.verificationMethod} is not controlled by issuer ${issuer}`,
