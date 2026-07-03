@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { prefixControlledBy } from "../src/controller.js";
-import { issueAgentAuthorization } from "../src/issue.js";
+import { issue, issueAgentAuthorization } from "../src/issue.js";
 import { generateKeyPairForSuite } from "../src/keys.js";
 import { signPresentation, verifyPresentation } from "../src/presentation.js";
 import type { Presentation, VerifiableCredential } from "../src/types.js";
@@ -157,6 +157,120 @@ describe("verifyPresentation — embedded credential validity propagates", () =>
       domain: DOMAIN,
     });
     const result = await verifyPresentation(vp, {
+      resolveKey,
+      isControlledBy: prefixControlledBy,
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
+  });
+});
+
+describe("verifyPresentation — roborev regressions", () => {
+  it("rejects a SUBSTITUTED same-id credential (the proof binds the payload digest)", async () => {
+    const issuerK = await issuerKey();
+    const holderK = await generateKeyPairForSuite(HOLDER_VM, "Ed25519");
+    const hop1 = await issueAgentAuthorization(
+      { principal: ISSUER, agent: AGENT, action: ACL_READ, id: "urn:hop:1" },
+      issuerK,
+    );
+    const vp = await signPresentation({ holder: AGENT, verifiableCredential: [hop1] }, holderK, {
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    // A DIFFERENT, validly-signed credential with the SAME id, swapped in post-signing.
+    const hop2 = await issueAgentAuthorization(
+      {
+        principal: ISSUER,
+        agent: AGENT,
+        action: "http://www.w3.org/ns/auth/acl#Write",
+        id: "urn:hop:1",
+      },
+      issuerK,
+    );
+    const substituted = { ...vp, verifiableCredential: [hop2] };
+    const result = await verifyPresentation(substituted, {
+      resolveKey: keyResolver(issuerK, holderK),
+      isControlledBy: prefixControlledBy,
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
+  });
+
+  it("does not throw on a malformed proof (proof: null) — returns verified:false", async () => {
+    const { holderK, hop, resolveKey } = await fixture();
+    const vp = await signPresentation(presentationOf(hop), holderK, {
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    const malformed = { ...vp, proof: null } as unknown as typeof vp;
+    const result = await verifyPresentation(malformed, {
+      resolveKey,
+      isControlledBy: prefixControlledBy,
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    expect(result.verified).toBe(false);
+  });
+
+  it("does NOT honour svc:authorizes on a non-AgentAuthorizationCredential", async () => {
+    const issuerK = await issuerKey();
+    const holderK = await generateKeyPairForSuite(HOLDER_VM, "Ed25519");
+    // A plain credential (NOT agent-authz) that merely carries an svc:authorizes claim.
+    const generic = await issue({
+      credential: {
+        issuer: ISSUER,
+        credentialSubject: {
+          id: "https://someone.example/#me",
+          "https://w3id.org/jeswr/solid-vc#authorizes": AGENT,
+        },
+      },
+      key: issuerK,
+    });
+    const vp = await signPresentation({ holder: AGENT, verifiableCredential: [generic] }, holderK, {
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    const result = await verifyPresentation(vp, {
+      resolveKey: keyResolver(issuerK, holderK),
+      isControlledBy: prefixControlledBy,
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("HOLDER_UNVERIFIED");
+  });
+});
+
+describe("verifyPresentation — malformed inputs never throw (roborev round 2)", () => {
+  it("handles verifiableCredential: [null] without throwing", async () => {
+    const { holderK, hop, resolveKey } = await fixture();
+    const vp = await signPresentation(presentationOf(hop), holderK, {
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    const broken = { ...vp, verifiableCredential: [null] } as unknown as typeof vp;
+    const result = await verifyPresentation(broken, {
+      resolveKey,
+      isControlledBy: prefixControlledBy,
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    expect(result.verified).toBe(false);
+  });
+
+  it("handles a proof missing proofPurpose without throwing", async () => {
+    const { holderK, hop, resolveKey } = await fixture();
+    const vp = await signPresentation(presentationOf(hop), holderK, {
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    const { proofPurpose: _p, ...proofNoPurpose } = vp.proof;
+    const broken = { ...vp, proof: proofNoPurpose } as unknown as typeof vp;
+    const result = await verifyPresentation(broken, {
       resolveKey,
       isControlledBy: prefixControlledBy,
       challenge: CHALLENGE,

@@ -4,11 +4,14 @@ import type { IssueOptions, KeyPair, Presentation, VerifiablePresentation, Verif
 import type { VerifyCredentialOptions } from "./verify.js";
 /**
  * Lower a {@link Presentation} (UNSIGNED — no proof) to RDF quads: the presentation
- * node (`VerifiablePresentation`), its `holder`, and a `verifiableCredential` link to
- * each presented credential's IRI. The presentation proof is computed over these
- * quads, so the holder + the set of presented credential IRIs are under the signature.
+ * node (`VerifiablePresentation`), its `holder`, and — per presented credential — a
+ * `verifiableCredential` link PLUS a `sec:digestMultibase` of the credential's SIGNED
+ * canonical form. Binding the digest (not merely the credential `id`) is what stops a
+ * same-`id` credential from being SUBSTITUTED without breaking the presentation
+ * signature. Async because the digest canonicalizes each credential. The presentation
+ * proof is computed over these quads.
  */
-export declare function presentationToRdf(presentation: Presentation): Quad[];
+export declare function presentationToRdf(presentation: Presentation): Promise<Quad[]>;
 /** Options for {@link signPresentation}. */
 export interface SignPresentationOptions extends IssueOptions {
     /** The anti-replay challenge to bind (Data Integrity §"challenge"). */

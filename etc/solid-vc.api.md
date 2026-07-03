@@ -266,7 +266,7 @@ export class PresentationNode extends TermWrapper {
 }
 
 // @public
-export function presentationToRdf(presentation: Presentation): Quad[];
+export function presentationToRdf(presentation: Presentation): Promise<Quad[]>;
 
 // @public
 export interface PresentationVerificationResult {

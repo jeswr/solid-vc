@@ -18,6 +18,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { Quad } from "@rdfjs/types";
+import { base58btc } from "multiformats/bases/base58";
+import { sha256 } from "multiformats/hashes/sha2";
+import { canonicalNQuads } from "./canonicalize.js";
+import { signedCredentialToRdf } from "./credential.js";
 import { DataIntegritySuite, defaultSuiteRegistry, type ProofSuite } from "./proof.js";
 import type {
   DataIntegrityProof,
@@ -32,16 +36,33 @@ import type {
 import type { VerifyCredentialOptions } from "./verify.js";
 import { verifyCredential } from "./verify.js";
 import { resolveControlledBy, verifyProofSet } from "./verify-core.js";
-import { SVC_AUTHORIZES, VC_HOLDER, VC_PRESENTATION, VC_VERIFIABLE_CREDENTIAL } from "./vocab.js";
-import { GraphBuilder, iriRef } from "./wrappers.js";
+import {
+  SEC_DIGEST_MULTIBASE,
+  SVC_AGENT_AUTHORIZATION,
+  SVC_AUTHORIZES,
+  VC_HOLDER,
+  VC_PRESENTATION,
+  VC_VERIFIABLE_CREDENTIAL,
+} from "./vocab.js";
+import { GraphBuilder, iriRef, type NodeRef } from "./wrappers.js";
+
+/** A content digest of a SIGNED credential (its canonical form) — multibase multihash. */
+async function credentialDigest(vc: VerifiableCredential): Promise<string> {
+  const canon = await canonicalNQuads(signedCredentialToRdf(vc));
+  const mh = await sha256.digest(new TextEncoder().encode(canon));
+  return base58btc.encode(mh.bytes);
+}
 
 /**
  * Lower a {@link Presentation} (UNSIGNED — no proof) to RDF quads: the presentation
- * node (`VerifiablePresentation`), its `holder`, and a `verifiableCredential` link to
- * each presented credential's IRI. The presentation proof is computed over these
- * quads, so the holder + the set of presented credential IRIs are under the signature.
+ * node (`VerifiablePresentation`), its `holder`, and — per presented credential — a
+ * `verifiableCredential` link PLUS a `sec:digestMultibase` of the credential's SIGNED
+ * canonical form. Binding the digest (not merely the credential `id`) is what stops a
+ * same-`id` credential from being SUBSTITUTED without breaking the presentation
+ * signature. Async because the digest canonicalizes each credential. The presentation
+ * proof is computed over these quads.
  */
-export function presentationToRdf(presentation: Presentation): Quad[] {
+export async function presentationToRdf(presentation: Presentation): Promise<Quad[]> {
   const id = presentation.id ?? `urn:uuid:${randomUUID()}`;
   const subject = iriRef(id);
   const b = new GraphBuilder();
@@ -50,9 +71,18 @@ export function presentationToRdf(presentation: Presentation): Quad[] {
     b.addIri(subject, VC_HOLDER, presentation.holder);
   }
   for (const vc of presentation.verifiableCredential) {
-    if (typeof vc.id === "string" && vc.id.length > 0) {
-      b.addIri(subject, VC_VERIFIABLE_CREDENTIAL, vc.id);
+    // Skip a malformed entry (e.g. `verifiableCredential: [null]`) — it is reported
+    // separately by the per-credential verify + holder binding; lowering it must not
+    // throw here.
+    if (vc === null || typeof vc !== "object") continue;
+    const node: NodeRef =
+      typeof vc.id === "string" && vc.id.length > 0
+        ? iriRef(vc.id)
+        : b.linkBlankNode(subject, VC_VERIFIABLE_CREDENTIAL);
+    if (node.kind === "iri") {
+      b.addIri(subject, VC_VERIFIABLE_CREDENTIAL, node.value);
     }
+    b.addLiteral(node, SEC_DIGEST_MULTIBASE, await credentialDigest(vc));
   }
   return b.quads();
 }
@@ -80,7 +110,7 @@ export async function signPresentation(
   const suite = options.suite ?? new DataIntegritySuite("eddsa-rdfc-2022");
   const id = presentation.id ?? `urn:uuid:${randomUUID()}`;
   const withId: Presentation = { ...presentation, id };
-  const proof = await suite.sign(presentationToRdf(withId), {
+  const proof = await suite.sign(await presentationToRdf(withId), {
     key,
     proofPurpose: options.proofPurpose ?? "authentication",
     created: options.created ?? new Date(),
@@ -110,12 +140,11 @@ export interface PresentationVerificationResult {
   readonly credentialResults: readonly VerificationResult[];
 }
 
-/** Normalise one-or-many proofs to an array. */
+/** Normalise one-or-many proofs to an array of ONLY well-formed proof objects. */
 function proofsOf(vp: VerifiablePresentation): DataIntegrityProof[] {
   const proof = vp.proof;
-  return Array.isArray(proof)
-    ? [...(proof as readonly DataIntegrityProof[])]
-    : [proof as DataIntegrityProof];
+  const raw: unknown[] = Array.isArray(proof) ? [...proof] : [proof];
+  return raw.filter((p): p is DataIntegrityProof => p !== null && typeof p === "object");
 }
 
 /**
@@ -184,7 +213,7 @@ export async function verifyPresentation(
   const controlledBy = resolveControlledBy(options, "authentication");
   errors.push(
     ...(await verifyProofSet({
-      documentQuads: presentationToRdf(unsignedPresentation(vp)),
+      documentQuads: await presentationToRdf(unsignedPresentation(vp)),
       proofs,
       issuer: holder,
       registry,
@@ -216,15 +245,32 @@ function unsignedPresentation(vp: VerifiablePresentation): Presentation {
   return rest as Presentation;
 }
 
-/** Whether `holder` is the subject id or the `svc:authorizes` agent of the credential. */
+/** Whether `vc`'s declared type includes `AgentAuthorizationCredential`. */
+function isAgentAuthorization(vc: VerifiableCredential): boolean {
+  const types = vc.type ?? [];
+  return types.some((t) => t === "AgentAuthorizationCredential" || t === SVC_AGENT_AUTHORIZATION);
+}
+
+/**
+ * Whether `holder` is the party the credential NAMES: its `credentialSubject.id`
+ * always; its `svc:authorizes` agent ONLY when the credential is an
+ * `AgentAuthorizationCredential` (so an unrelated credential that merely happens to
+ * carry an `svc:authorizes` claim is not mistaken for a delegation to the holder).
+ * Runtime-guarded so a malformed credential entry returns `false`, never throws.
+ */
 function credentialNamesHolder(vc: VerifiableCredential, holder: string): boolean {
+  if (vc === null || typeof vc !== "object" || vc.credentialSubject === undefined) return false;
   const subjects = Array.isArray(vc.credentialSubject)
     ? vc.credentialSubject
     : [vc.credentialSubject];
+  const agentAuthz = isAgentAuthorization(vc);
   for (const subject of subjects) {
+    if (subject === null || typeof subject !== "object") continue;
     if (subject.id === holder) return true;
-    const authorizes = subject[SVC_AUTHORIZES];
-    if (typeof authorizes === "string" && authorizes === holder) return true;
+    if (agentAuthz) {
+      const authorizes = subject[SVC_AUTHORIZES];
+      if (typeof authorizes === "string" && authorizes === holder) return true;
+    }
   }
   return false;
 }

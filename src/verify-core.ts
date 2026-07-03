@@ -84,6 +84,16 @@ export interface ProofSetInput {
 export async function verifyProofSet(input: ProofSetInput): Promise<VerificationError[]> {
   const errors: VerificationError[] = [];
   for (const proof of input.proofs) {
+    // Fail CLOSED on a malformed proof (missing/mistyped required fields) rather than
+    // throwing downstream (e.g. `normalizePurpose(undefined)`). Covers every verify
+    // path that funnels through here.
+    if (!isWellFormedProof(proof)) {
+      errors.push({
+        code: "INVALID_SIGNATURE",
+        message: "malformed proof (missing required fields)",
+      });
+      continue;
+    }
     const suite = input.registry.get(proof.cryptosuite);
     if (suite === undefined) {
       errors.push({
@@ -118,6 +128,18 @@ export async function verifyProofSet(input: ProofSetInput): Promise<Verification
     }
   }
   return errors;
+}
+
+/** Whether `proof` carries the string fields the pipeline dereferences (fail-closed guard). */
+function isWellFormedProof(proof: DataIntegrityProof): boolean {
+  return (
+    proof !== null &&
+    typeof proof === "object" &&
+    typeof proof.cryptosuite === "string" &&
+    typeof proof.verificationMethod === "string" &&
+    typeof proof.proofPurpose === "string" &&
+    typeof proof.proofValue === "string"
+  );
 }
 
 /** Verify one proof through its suite, mapping any throw to a fail-closed `false`. */

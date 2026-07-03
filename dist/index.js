@@ -1127,6 +1127,8 @@ function relatedResourceFromQuads(signedQuads, iri) {
 
 // src/presentation.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
+import { base58btc as base58btc3 } from "multiformats/bases/base58";
+import { sha256 as sha2562 } from "multiformats/hashes/sha2";
 
 // src/status-list.ts
 import { gunzipSync } from "node:zlib";
@@ -1301,6 +1303,13 @@ function checkValidityWindow(now, validFrom, validUntil) {
 async function verifyProofSet(input) {
   const errors = [];
   for (const proof of input.proofs) {
+    if (!isWellFormedProof(proof)) {
+      errors.push({
+        code: "INVALID_SIGNATURE",
+        message: "malformed proof (missing required fields)"
+      });
+      continue;
+    }
     const suite = input.registry.get(proof.cryptosuite);
     if (suite === void 0) {
       errors.push({
@@ -1335,6 +1344,9 @@ async function verifyProofSet(input) {
     }
   }
   return errors;
+}
+function isWellFormedProof(proof) {
+  return proof !== null && typeof proof === "object" && typeof proof.cryptosuite === "string" && typeof proof.verificationMethod === "string" && typeof proof.proofPurpose === "string" && typeof proof.proofValue === "string";
 }
 async function verifyOneProof(suite, documentQuads, proof, resolveKey) {
   try {
@@ -1594,7 +1606,12 @@ async function verifyCredential(vc, options) {
 }
 
 // src/presentation.ts
-function presentationToRdf(presentation) {
+async function credentialDigest(vc) {
+  const canon = await canonicalNQuads(signedCredentialToRdf(vc));
+  const mh = await sha2562.digest(new TextEncoder().encode(canon));
+  return base58btc3.encode(mh.bytes);
+}
+async function presentationToRdf(presentation) {
   const id = presentation.id ?? `urn:uuid:${randomUUID3()}`;
   const subject = iriRef(id);
   const b = new GraphBuilder();
@@ -1603,9 +1620,12 @@ function presentationToRdf(presentation) {
     b.addIri(subject, VC_HOLDER, presentation.holder);
   }
   for (const vc of presentation.verifiableCredential) {
-    if (typeof vc.id === "string" && vc.id.length > 0) {
-      b.addIri(subject, VC_VERIFIABLE_CREDENTIAL, vc.id);
+    if (vc === null || typeof vc !== "object") continue;
+    const node = typeof vc.id === "string" && vc.id.length > 0 ? iriRef(vc.id) : b.linkBlankNode(subject, VC_VERIFIABLE_CREDENTIAL);
+    if (node.kind === "iri") {
+      b.addIri(subject, VC_VERIFIABLE_CREDENTIAL, node.value);
     }
+    b.addLiteral(node, SEC_DIGEST_MULTIBASE, await credentialDigest(vc));
   }
   return b.quads();
 }
@@ -1613,7 +1633,7 @@ async function signPresentation(presentation, key, options = {}) {
   const suite = options.suite ?? new DataIntegritySuite("eddsa-rdfc-2022");
   const id = presentation.id ?? `urn:uuid:${randomUUID3()}`;
   const withId = { ...presentation, id };
-  const proof = await suite.sign(presentationToRdf(withId), {
+  const proof = await suite.sign(await presentationToRdf(withId), {
     key,
     proofPurpose: options.proofPurpose ?? "authentication",
     created: options.created ?? /* @__PURE__ */ new Date(),
@@ -1624,7 +1644,8 @@ async function signPresentation(presentation, key, options = {}) {
 }
 function proofsOf2(vp) {
   const proof = vp.proof;
-  return Array.isArray(proof) ? [...proof] : [proof];
+  const raw = Array.isArray(proof) ? [...proof] : [proof];
+  return raw.filter((p) => p !== null && typeof p === "object");
 }
 async function verifyPresentation(vp, options) {
   if (vp === null || typeof vp !== "object" || !Array.isArray(vp.verifiableCredential) || vp.proof === void 0) {
@@ -1670,7 +1691,7 @@ async function verifyPresentation(vp, options) {
   const controlledBy = resolveControlledBy(options, "authentication");
   errors.push(
     ...await verifyProofSet({
-      documentQuads: presentationToRdf(unsignedPresentation(vp)),
+      documentQuads: await presentationToRdf(unsignedPresentation(vp)),
       proofs,
       issuer: holder,
       registry,
@@ -1693,12 +1714,21 @@ function unsignedPresentation(vp) {
   const { proof: _proof, ...rest } = vp;
   return rest;
 }
+function isAgentAuthorization(vc) {
+  const types = vc.type ?? [];
+  return types.some((t) => t === "AgentAuthorizationCredential" || t === SVC_AGENT_AUTHORIZATION);
+}
 function credentialNamesHolder(vc, holder) {
+  if (vc === null || typeof vc !== "object" || vc.credentialSubject === void 0) return false;
   const subjects = Array.isArray(vc.credentialSubject) ? vc.credentialSubject : [vc.credentialSubject];
+  const agentAuthz = isAgentAuthorization(vc);
   for (const subject of subjects) {
+    if (subject === null || typeof subject !== "object") continue;
     if (subject.id === holder) return true;
-    const authorizes = subject[SVC_AUTHORIZES];
-    if (typeof authorizes === "string" && authorizes === holder) return true;
+    if (agentAuthz) {
+      const authorizes = subject[SVC_AUTHORIZES];
+      if (typeof authorizes === "string" && authorizes === holder) return true;
+    }
   }
   return false;
 }
