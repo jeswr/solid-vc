@@ -335,3 +335,27 @@ describe("roborev regressions — fail-open guards", () => {
     expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
   });
 });
+
+describe("roborev regression — status read is scoped to the SIGNED graph", () => {
+  it("ignores an UNSIGNED status:encodedList injected on the proof node (stays REVOKED)", async () => {
+    const key = await issuerKey();
+    const hop = await signedHop(key, REVOCATION_ENTRY);
+    // A genuinely-signed status list with the revocation bit SET.
+    const revokedList = await signedStatusList({ key, encodedList: encodeList([REVOKED_INDEX]) });
+    // The proof node is NOT covered by the signature. An attacker appends a CLEAR
+    // encodedList triple on it, hoping to un-revoke. The gate must read only the
+    // signed encodedList and still return REVOKED.
+    const proofMatch = revokedList.match(/sec:proof\s+(_:[\w-]+)/);
+    expect(proofMatch).not.toBeNull();
+    const proofNode = (proofMatch as RegExpMatchArray)[1];
+    const clearList = encodeList([]);
+    const tampered = `${revokedList}\n${proofNode} <https://www.w3.org/ns/credentials/status#encodedList> "${clearList}" .\n`;
+    const result = await verifyCredential(hop, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+      fetch: fakeFetch({ [LIST_URL]: tampered }),
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("REVOKED");
+  });
+});

@@ -231,6 +231,7 @@ export function parseCredentialRdf(body: string, contentType?: string): Promise<
 export interface ParsedVerification extends VerificationResult {
     readonly credentialId?: string;
     readonly dataset?: DatasetCore;
+    readonly signedDocumentQuads?: readonly Quad[];
 }
 
 // @public

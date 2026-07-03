@@ -1,10 +1,17 @@
-import type { DatasetCore } from "@rdfjs/types";
+import type { DatasetCore, Quad } from "@rdfjs/types";
 import type { VerificationResult } from "./types.js";
 import type { VerifyCredentialOptions } from "./verify.js";
 /** The result of {@link parseAndVerifyCredential}: the verdict plus the parsed graph. */
 export interface ParsedVerification extends VerificationResult {
     /** The parsed RDF dataset (so a caller can read further claims, e.g. `encodedList`). */
     readonly dataset?: DatasetCore;
+    /**
+     * The SIGNED claim quads — the dataset with the proof node(s) removed. Read further
+     * claims (e.g. a status list's `encodedList`) from HERE, never the full `dataset`:
+     * only these quads are covered by the signature, so unsigned triples an attacker
+     * appended to the proof graph cannot influence a decision.
+     */
+    readonly signedDocumentQuads?: readonly Quad[];
     /** The verified credential's IRI (the graph node), when a single credential was found. */
     readonly credentialId?: string;
 }

@@ -21,7 +21,7 @@
 // status-outage denial.
 
 import { gunzipSync } from "node:zlib";
-import type { DatasetCore } from "@rdfjs/types";
+import type { Quad } from "@rdfjs/types";
 import { base64url } from "multiformats/bases/base64";
 import type { ControlledByCheck } from "./controller.js";
 import type { FetchPort } from "./fetch-port.js";
@@ -119,7 +119,15 @@ async function checkOneEntry(
       ? monotonicKey(params.credentialId)
       : undefined;
   if (monoKey !== undefined && params.revocationStore !== undefined) {
-    if (await params.revocationStore.has(monoKey)) {
+    // A store that throws must fail CLOSED, not escape as an unhandled rejection —
+    // the verifier API promises structured errors, never throws, for status state.
+    let previouslyRevoked: boolean;
+    try {
+      previouslyRevoked = await params.revocationStore.has(monoKey);
+    } catch {
+      return [retrievalError("revocation store read failed (fail-closed)")];
+    }
+    if (previouslyRevoked) {
       return [
         { code: "REVOKED", message: `credential ${params.credentialId} was previously revoked` },
       ];
@@ -141,7 +149,13 @@ async function checkOneEntry(
 
   if (purpose === "revocation") {
     if (monoKey !== undefined && params.revocationStore !== undefined) {
-      await params.revocationStore.add(monoKey);
+      // Persisting the revocation is best-effort; a failure must not mask the REVOKED
+      // verdict nor throw (fail-closed toward "revoked").
+      try {
+        await params.revocationStore.add(monoKey);
+      } catch {
+        /* best-effort persistence; the REVOKED verdict below still stands */
+      }
     }
     return [{ code: "REVOKED", message: `credential is revoked (statusListIndex ${index})` }];
   }
@@ -189,17 +203,21 @@ async function fetchStatusList(
     };
   }
 
-  const dataset = result.dataset;
-  if (dataset === undefined) {
-    return { error: retrievalError("status list credential parsed to no dataset") };
+  // Read the list's purpose + encodedList ONLY from the SIGNED quads (the proof-
+  // stripped claim graph). Reading from the full dataset would let an attacker append
+  // unsigned `status:encodedList` / `status:statusPurpose` triples on the proof node
+  // (which the signature does not cover) and drive the revocation decision.
+  const signed = result.signedDocumentQuads;
+  if (signed === undefined) {
+    return { error: retrievalError("status list credential exposed no signed quads") };
   }
-  const listPurpose = firstObjectLiteral(dataset, STATUS_PURPOSE);
+  const listPurpose = firstSignedLiteral(signed, STATUS_PURPOSE);
   if (listPurpose !== purpose) {
     return {
       error: retrievalError(`status list purpose "${listPurpose}" != entry "${purpose}"`),
     };
   }
-  const encoded = firstObjectLiteral(dataset, STATUS_ENCODED_LIST);
+  const encoded = firstSignedLiteral(signed, STATUS_ENCODED_LIST);
   if (encoded === undefined) {
     return { error: retrievalError("status list has no encodedList") };
   }
@@ -241,9 +259,9 @@ function bitAt(bytes: Uint8Array, index: number): boolean | undefined {
   return ((byte >> (7 - bitInByte)) & 1) === 1;
 }
 
-/** The first literal object of a predicate anywhere in the dataset, or `undefined`. */
-function firstObjectLiteral(dataset: DatasetCore, predicate: string): string | undefined {
-  for (const quad of dataset.match()) {
+/** The first literal object of a predicate among the SIGNED quads, or `undefined`. */
+function firstSignedLiteral(quads: readonly Quad[], predicate: string): string | undefined {
+  for (const quad of quads) {
     if (quad.predicate.value === predicate && quad.object.termType === "Literal") {
       return quad.object.value;
     }

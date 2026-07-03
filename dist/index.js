@@ -1087,7 +1087,13 @@ async function checkOneEntry(entry, params) {
   }
   const monoKey = purpose === "revocation" && params.credentialId !== void 0 ? monotonicKey(params.credentialId) : void 0;
   if (monoKey !== void 0 && params.revocationStore !== void 0) {
-    if (await params.revocationStore.has(monoKey)) {
+    let previouslyRevoked;
+    try {
+      previouslyRevoked = await params.revocationStore.has(monoKey);
+    } catch {
+      return [retrievalError("revocation store read failed (fail-closed)")];
+    }
+    if (previouslyRevoked) {
       return [
         { code: "REVOKED", message: `credential ${params.credentialId} was previously revoked` }
       ];
@@ -1105,7 +1111,10 @@ async function checkOneEntry(entry, params) {
   if (!bitSet) return [];
   if (purpose === "revocation") {
     if (monoKey !== void 0 && params.revocationStore !== void 0) {
-      await params.revocationStore.add(monoKey);
+      try {
+        await params.revocationStore.add(monoKey);
+      } catch {
+      }
     }
     return [{ code: "REVOKED", message: `credential is revoked (statusListIndex ${index})` }];
   }
@@ -1142,17 +1151,17 @@ async function fetchStatusList(entry, purpose, params, fetch) {
       error: retrievalError(`status list issuer ${result.issuer} != hop issuer ${params.issuer}`)
     };
   }
-  const dataset = result.dataset;
-  if (dataset === void 0) {
-    return { error: retrievalError("status list credential parsed to no dataset") };
+  const signed = result.signedDocumentQuads;
+  if (signed === void 0) {
+    return { error: retrievalError("status list credential exposed no signed quads") };
   }
-  const listPurpose = firstObjectLiteral(dataset, STATUS_PURPOSE);
+  const listPurpose = firstSignedLiteral(signed, STATUS_PURPOSE);
   if (listPurpose !== purpose) {
     return {
       error: retrievalError(`status list purpose "${listPurpose}" != entry "${purpose}"`)
     };
   }
-  const encoded = firstObjectLiteral(dataset, STATUS_ENCODED_LIST);
+  const encoded = firstSignedLiteral(signed, STATUS_ENCODED_LIST);
   if (encoded === void 0) {
     return { error: retrievalError("status list has no encodedList") };
   }
@@ -1180,8 +1189,8 @@ function bitAt(bytes, index) {
   const byte = bytes[byteIndex];
   return (byte >> 7 - bitInByte & 1) === 1;
 }
-function firstObjectLiteral(dataset, predicate) {
-  for (const quad of dataset.match()) {
+function firstSignedLiteral(quads, predicate) {
+  for (const quad of quads) {
     if (quad.predicate.value === predicate && quad.object.termType === "Literal") {
       return quad.object.value;
     }
@@ -1341,7 +1350,7 @@ async function parseAndVerifyCredential(body, contentType2, options) {
       resolveKey: options.resolveKey
     })
   );
-  if (options.checkStatus !== false) {
+  if (options.checkStatus !== false && errors.length === 0) {
     const entries = readStatusEntries(dataset, node.value);
     if (entries.length > 0) {
       errors.push(
@@ -1360,7 +1369,21 @@ async function parseAndVerifyCredential(body, contentType2, options) {
       );
     }
   }
-  return errors.length === 0 ? { verified: true, errors: [], issuer, dataset, credentialId: node.value } : { verified: false, errors, issuer, dataset, credentialId: node.value };
+  return errors.length === 0 ? {
+    verified: true,
+    errors: [],
+    issuer,
+    dataset,
+    signedDocumentQuads: documentQuads,
+    credentialId: node.value
+  } : {
+    verified: false,
+    errors,
+    issuer,
+    dataset,
+    signedDocumentQuads: documentQuads,
+    credentialId: node.value
+  };
 }
 function readStatusEntries(dataset, credentialId) {
   const entries = [];
@@ -1471,7 +1494,7 @@ async function verifyCredential(vc, options) {
     })
   );
   const statusEntries = statusEntriesOf(vc);
-  if (statusEntries.length > 0 && options.checkStatus !== false) {
+  if (statusEntries.length > 0 && options.checkStatus !== false && errors.length === 0) {
     errors.push(
       ...await checkCredentialStatus({
         entries: statusEntries,

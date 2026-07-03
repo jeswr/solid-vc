@@ -149,11 +149,14 @@ export async function verifyCredential(
     })),
   );
 
-  // 9. Bitstring Status List status gate (revocation / suspension). Skipped only
-  // when explicitly disabled (checkStatus === false) — a production verify keeps it
-  // on; a skipped revocation check is an accept.
+  // 9. Bitstring Status List status gate (revocation / suspension). Run ONLY after
+  // the core gates passed (errors empty): we must not dereference a status pointer,
+  // nor trust the (otherwise-signed) status entry, from a credential whose proof /
+  // issuer-binding / validity / trust have not been established — otherwise a tampered
+  // or untrusted credential could drive outbound fetches through the verifier. Skipped
+  // when explicitly disabled (checkStatus === false); a skipped check is an accept.
   const statusEntries = statusEntriesOf(vc);
-  if (statusEntries.length > 0 && options.checkStatus !== false) {
+  if (statusEntries.length > 0 && options.checkStatus !== false && errors.length === 0) {
     errors.push(
       ...(await checkCredentialStatus({
         entries: statusEntries,

@@ -41,6 +41,13 @@ import { type CredentialNode, firstIri, firstLiteral, type ProofNode, wrapVc } f
 export interface ParsedVerification extends VerificationResult {
   /** The parsed RDF dataset (so a caller can read further claims, e.g. `encodedList`). */
   readonly dataset?: DatasetCore;
+  /**
+   * The SIGNED claim quads — the dataset with the proof node(s) removed. Read further
+   * claims (e.g. a status list's `encodedList`) from HERE, never the full `dataset`:
+   * only these quads are covered by the signature, so unsigned triples an attacker
+   * appended to the proof graph cannot influence a decision.
+   */
+  readonly signedDocumentQuads?: readonly Quad[];
   /** The verified credential's IRI (the graph node), when a single credential was found. */
   readonly credentialId?: string;
 }
@@ -140,9 +147,12 @@ export async function parseAndVerifyCredential(
   );
 
   // Status gate (parity with verifyCredential) — a fetched VC must not bypass
-  // revocation. Skipped only when explicitly disabled (e.g. when verify-rdf is itself
-  // verifying a status-list credential, to avoid recursion).
-  if (options.checkStatus !== false) {
+  // revocation. Run it ONLY after the core gates passed (errors empty): we must not
+  // dereference a status pointer, nor trust the status entry, from a credential whose
+  // proof / issuer-binding / validity / trust have not been established. Skipped when
+  // explicitly disabled (e.g. verifying a status-list credential itself, to avoid
+  // recursion).
+  if (options.checkStatus !== false && errors.length === 0) {
     const entries = readStatusEntries(dataset, node.value);
     if (entries.length > 0) {
       errors.push(
@@ -163,8 +173,22 @@ export async function parseAndVerifyCredential(
   }
 
   return errors.length === 0
-    ? { verified: true, errors: [], issuer, dataset, credentialId: node.value }
-    : { verified: false, errors, issuer, dataset, credentialId: node.value };
+    ? {
+        verified: true,
+        errors: [],
+        issuer,
+        dataset,
+        signedDocumentQuads: documentQuads,
+        credentialId: node.value,
+      }
+    : {
+        verified: false,
+        errors,
+        issuer,
+        dataset,
+        signedDocumentQuads: documentQuads,
+        credentialId: node.value,
+      };
 }
 
 /** Read `credentialStatus` entries for the credential from the parsed RDF graph. */
