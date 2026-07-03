@@ -105,10 +105,15 @@ const vc = await issueAgentAuthorization(
   key,
 );
 
-// A relying party verifies — resolving the verification method to a public key
-// (e.g. from Alice's WebID profile / a DID document).
+// A relying party verifies — resolving the verification method to a public key, and
+// injecting an SSRF-guarded fetch so the issuer–key controller check can resolve
+// Alice's WebID document. Without `fetch` (and no explicit `isControlledBy`), the
+// controller gate FAILS CLOSED.
+import { nodeGuardedFetch } from "@jeswr/guarded-fetch/node";
+
 const result = await verifyCredential(vc, {
   resolveKey: (vm) => (vm === key.verificationMethod ? key.publicKey : undefined),
+  fetch: nodeGuardedFetch, // resolves the controller doc + the status list, SSRF-safe
   trustedIssuers: ["https://alice.example/profile#me"],
 });
 // result.verified === true; result.errors === []
@@ -116,7 +121,39 @@ const result = await verifyCredential(vc, {
 
 Every verification failure is reported as a distinct structured error code (`INVALID_SIGNATURE`,
 `EXPIRED`, `NOT_YET_VALID`, `ISSUER_MISMATCH`, `PROOF_PURPOSE_MISMATCH`, `UNKNOWN_CRYPTOSUITE`,
-`UNTRUSTED_ISSUER`, `NO_PROOF`, `MALFORMED`) — never collapsed into a generic `false`.
+`UNTRUSTED_ISSUER`, `NO_PROOF`, `MALFORMED`, `REVOKED`, `SUSPENDED`, `STATUS_RETRIEVAL_ERROR`,
+`POLICY_INTEGRITY`, `CHALLENGE_MISMATCH`, `DOMAIN_MISMATCH`, `HOLDER_UNVERIFIED`) — never collapsed
+into a generic `false`.
+
+## Agent-authorization hardening (the CCG Agent-Authorization-Credential note)
+
+Four verification gates implement the [Agent-Authorization-Credential note][note]'s issuance +
+integrity requirements. All are **fail-closed** and take an **injected SSRF-guarded `fetch`**
+(recommended: `@jeswr/guarded-fetch/node`); the pure verification core never reaches for a global
+`fetch`, and a network gate with no `fetch` DENIES rather than skipping.
+
+- **Document-resolved issuer–key binding.** The controller check is a trust decision, not a string
+  compare. `verifyCredential`'s default now fetches the issuer's own authoritative document and
+  requires it to assert `<issuer> <verificationRelationship> <verificationMethod>` (the relationship
+  matching the proof purpose). The unsafe string-prefix heuristic is the explicit, documented-unsafe
+  `prefixControlledBy` opt-in — never the default. Override via `isControlledBy`.
+- **Bitstring Status List v1.0 revocation.** When a credential carries a `credentialStatus`,
+  `verifyCredential` retrieves + verifies the referenced status-list credential (same issuer, over
+  its exact signed bytes), decodes the multibase/GZIP bitstring, and checks the bit: a set
+  `"revocation"` bit → `REVOKED` (permanent, with optional monotonic `RevocationStore`), a set
+  `"suspension"` bit → `SUSPENDED`. Any unavailability/integrity failure → `STATUS_RETRIEVAL_ERROR`.
+- **Policy-content binding.** `resolveBoundPolicy(vc, { fetch })` accepts an **embedded** policy
+  (signed inline) or a **by-reference IRI + a VCDM `relatedResource` digest** (fetched octets verified
+  against the signed `digestSRI`/`digestMultibase`). A **bare, digest-less** `svc:policy` reference is
+  rejected (`POLICY_INTEGRITY`). The builder emits either form via `embeddedPolicy` / `policyDigest`.
+- **Presentations.** `signPresentation` / `verifyPresentation` bind a `challenge` + `domain` under the
+  presentation proof (anti-replay) and enforce **holder binding** — the presenter must prove control
+  of the WebID the credential names (its subject, or its `svc:authorizes` agent), not merely hold it.
+
+`parseAndVerifyCredential(body, contentType, options)` verifies a **fetched, serialized** VC over the
+graph parsed from *those bytes* (Data Integrity signs the canonical claim graph) — the building block
+the composed 4-phase chain verifier will reuse. `signedCredentialToTurtle` publishes a signed VC as a
+dereferenceable RDF document.
 
 ## Relationship to the prior VC line
 
@@ -158,6 +195,7 @@ diff there is a deliberate, semver-aware contract change).
 [di]: https://www.w3.org/TR/vc-data-integrity/
 [rdfc]: https://www.w3.org/TR/rdf-canon/
 [roadmap]: https://github.com/jeswr/prod-solid-server/blob/main/docs/design/agentic-solid-infrastructure.md
+[note]: https://github.com/jeswr/agent-authz-credential-spec
 [m1]: https://github.com/jeswr/solid-agent-card
 [m3]: https://github.com/jeswr/solid-odrl
 [dpop]: https://github.com/jeswr/solid-dpop
