@@ -140,11 +140,19 @@ export interface PresentationVerificationResult {
   readonly credentialResults: readonly VerificationResult[];
 }
 
-/** Normalise one-or-many proofs to an array of ONLY well-formed proof objects. */
+/**
+ * Normalise one-or-many proofs to an array, PRESERVING malformed entries — a mixed
+ * `[validProof, null]` must NOT pass by silently dropping the bad entry; `verifyProofSet`
+ * fails closed on each malformed proof (every proof must be valid).
+ */
 function proofsOf(vp: VerifiablePresentation): DataIntegrityProof[] {
   const proof = vp.proof;
-  const raw: unknown[] = Array.isArray(proof) ? [...proof] : [proof];
-  return raw.filter((p): p is DataIntegrityProof => p !== null && typeof p === "object");
+  return (Array.isArray(proof) ? [...proof] : [proof]) as DataIntegrityProof[];
+}
+
+/** Whether a value is a non-null proof object safe to read `.challenge`/`.domain` from. */
+function isProofObject(proof: DataIntegrityProof): boolean {
+  return proof !== null && typeof proof === "object";
 }
 
 /**
@@ -196,6 +204,9 @@ export async function verifyPresentation(
     errors.push({ code: "NO_PROOF", message: "presentation carries no proof" });
   }
   for (const proof of proofs) {
+    // A malformed proof is flagged by verifyProofSet below; skip the challenge/domain
+    // read here so it never throws on a non-object entry.
+    if (!isProofObject(proof)) continue;
     if (options.challenge !== undefined && proof.challenge !== options.challenge) {
       errors.push({
         code: "CHALLENGE_MISMATCH",
@@ -211,9 +222,22 @@ export async function verifyPresentation(
   }
   const registry = options.registry ?? defaultSuiteRegistry();
   const controlledBy = resolveControlledBy(options, "authentication");
+  // Lowering canonicalizes each embedded credential; a malformed credential (e.g.
+  // `proof: null`) can throw here — catch it and fail closed rather than break the
+  // public "never throws" contract.
+  let documentQuads: Quad[];
+  try {
+    documentQuads = await presentationToRdf(unsignedPresentation(vp));
+  } catch {
+    errors.push({
+      code: "MALFORMED",
+      message: "presentation graph could not be lowered (malformed embedded credential)",
+    });
+    return { verified: false, errors, holder, credentialResults };
+  }
   errors.push(
     ...(await verifyProofSet({
-      documentQuads: await presentationToRdf(unsignedPresentation(vp)),
+      documentQuads,
       proofs,
       issuer: holder,
       registry,

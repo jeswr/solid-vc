@@ -280,3 +280,40 @@ describe("verifyPresentation — malformed inputs never throw (roborev round 2)"
     expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
   });
 });
+
+describe("verifyPresentation — malformed inputs never throw (roborev round 3)", () => {
+  it("fails a mixed proof array [validProof, null] (every proof must be valid)", async () => {
+    const { holderK, hop, resolveKey } = await fixture();
+    const vp = await signPresentation(presentationOf(hop), holderK, {
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    const single = Array.isArray(vp.proof) ? vp.proof[0] : vp.proof;
+    const broken = { ...vp, proof: [single, null] } as unknown as typeof vp;
+    const result = await verifyPresentation(broken, {
+      resolveKey,
+      isControlledBy: prefixControlledBy,
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("INVALID_SIGNATURE");
+  });
+
+  it("does not throw when an embedded credential has proof: null", async () => {
+    const { holderK, hop, resolveKey } = await fixture();
+    const brokenHop = { ...hop, proof: null } as unknown as typeof hop;
+    const vp = await signPresentation({ holder: AGENT, verifiableCredential: [hop] }, holderK, {
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    const broken = { ...vp, verifiableCredential: [brokenHop] } as unknown as typeof vp;
+    const result = await verifyPresentation(broken, {
+      resolveKey,
+      isControlledBy: prefixControlledBy,
+      challenge: CHALLENGE,
+      domain: DOMAIN,
+    });
+    expect(result.verified).toBe(false);
+  });
+});

@@ -1646,8 +1646,10 @@ async function signPresentation(presentation, key, options = {}) {
 }
 function proofsOf2(vp) {
   const proof = vp.proof;
-  const raw = Array.isArray(proof) ? [...proof] : [proof];
-  return raw.filter((p) => p !== null && typeof p === "object");
+  return Array.isArray(proof) ? [...proof] : [proof];
+}
+function isProofObject(proof) {
+  return proof !== null && typeof proof === "object";
 }
 async function verifyPresentation(vp, options) {
   if (vp === null || typeof vp !== "object" || !Array.isArray(vp.verifiableCredential) || vp.proof === void 0) {
@@ -1676,6 +1678,7 @@ async function verifyPresentation(vp, options) {
     errors.push({ code: "NO_PROOF", message: "presentation carries no proof" });
   }
   for (const proof of proofs) {
+    if (!isProofObject(proof)) continue;
     if (options.challenge !== void 0 && proof.challenge !== options.challenge) {
       errors.push({
         code: "CHALLENGE_MISMATCH",
@@ -1691,9 +1694,19 @@ async function verifyPresentation(vp, options) {
   }
   const registry = options.registry ?? defaultSuiteRegistry();
   const controlledBy = resolveControlledBy(options, "authentication");
+  let documentQuads;
+  try {
+    documentQuads = await presentationToRdf(unsignedPresentation(vp));
+  } catch {
+    errors.push({
+      code: "MALFORMED",
+      message: "presentation graph could not be lowered (malformed embedded credential)"
+    });
+    return { verified: false, errors, holder, credentialResults };
+  }
   errors.push(
     ...await verifyProofSet({
-      documentQuads: await presentationToRdf(unsignedPresentation(vp)),
+      documentQuads,
       proofs,
       issuer: holder,
       registry,
