@@ -33,6 +33,28 @@ export interface Credential {
      * status gate. Absent = no status list (no revocation information).
      */
     readonly credentialStatus?: CredentialStatus | readonly CredentialStatus[];
+    /**
+     * VCDM 2.0 §5.3 related resources with integrity digests. Lowered UNDER the proof,
+     * so the signature commits to each referenced resource's CONTENT. Used to bind a
+     * by-reference `svc:policy` document (this note's D4) — see `resolveBoundPolicy`.
+     */
+    readonly relatedResource?: RelatedResource | readonly RelatedResource[];
+}
+/**
+ * A VCDM 2.0 §5.3 `relatedResource` entry: an IRI plus a content digest
+ * (`digestSRI` — Subresource Integrity `<alg>-<base64>`; and/or `digestMultibase` — a
+ * multibase-encoded multihash) and optional `mediaType`. The digest lets the
+ * credential's proof commit to the referenced resource's exact octets.
+ */
+export interface RelatedResource {
+    /** The referenced resource's IRI. */
+    readonly id: string;
+    /** A Subresource-Integrity digest, e.g. `sha384-<base64>`. */
+    readonly digestSRI?: string;
+    /** A multibase-encoded multihash digest of the resource octets. */
+    readonly digestMultibase?: string;
+    /** The media type the resource is to be parsed as. */
+    readonly mediaType?: string;
 }
 /**
  * A W3C Bitstring Status List v1.0 `credentialStatus` entry: a pointer into a
@@ -73,8 +95,30 @@ export interface AgentAuthorization {
     readonly action: string | readonly string[];
     /** The resource / asset the authorization governs (optional). */
     readonly target?: string;
-    /** Link to the governing `@jeswr/solid-odrl` ODRL policy graph (optional). */
+    /**
+     * Link to the governing `@jeswr/solid-odrl` ODRL policy graph by IRI (optional).
+     * A BARE IRI reference is an integrity hole (this note's D4) — a conforming chain
+     * verifier REJECTS it (`POLICY_INTEGRITY`). Bind the content instead: either
+     * {@link embeddedPolicy} (RECOMMENDED — the proof covers every policy triple) or
+     * this IRI together with {@link policyDigest} (a VCDM `relatedResource` digest).
+     */
     readonly policy?: string;
+    /**
+     * An EMBEDDED ODRL policy graph — an inline object described in the credential's
+     * claim graph, so the Data Integrity proof signs every policy triple. The
+     * RECOMMENDED, integrity-safe binding form.
+     */
+    readonly embeddedPolicy?: JsonValue;
+    /**
+     * When {@link policy} is a by-reference IRI, the VCDM 2.0 `relatedResource` digest
+     * that binds its content — emitted so a verifier can fetch the IRI and confirm the
+     * octets match. Without it, the reference is bare and rejected.
+     */
+    readonly policyDigest?: {
+        readonly digestSRI?: string;
+        readonly digestMultibase?: string;
+        readonly mediaType?: string;
+    };
     /** Credential IRI (optional — random `urn:uuid:` if omitted). */
     readonly id?: string;
     /** Validity start (optional — now at issue time). */
@@ -157,7 +201,7 @@ export interface VerificationError {
     readonly message: string;
 }
 /** The closed set of verification failure categories. */
-export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR";
+export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR" | "POLICY_INTEGRITY";
 /** Options shared by the verification entrypoints. */
 export interface VerifyOptions {
     /** The instant to evaluate validity against (default `new Date()`). Injectable for tests. */

@@ -75,6 +75,7 @@ const RUNTIME_SURFACE: ReadonlyArray<readonly [string, string]> = [
   ["parseCredentialRdf", "function"],
   ["prefixControlledBy", "function"],
   ["proofOptionsQuads", "function"],
+  ["resolveBoundPolicy", "function"],
   ["serialize", "function"],
   ["signedCredentialToRdf", "function"],
   ["signedCredentialToTurtle", "function"],
@@ -91,6 +92,7 @@ const VALUE_NAMES: readonly string[] = RUNTIME_SURFACE.map(([n]) => n)
 // Type-only export names (interfaces / type aliases — erase at runtime). Sorted.
 const TYPE_NAMES: readonly string[] = [
   "AgentAuthorization",
+  "BoundPolicy",
   "ControlledByCheck",
   "Credential",
   "CredentialStatus",
@@ -103,10 +105,12 @@ const TYPE_NAMES: readonly string[] = [
   "JsonValue",
   "KeyPair",
   "ParsedVerification",
+  "PolicyBindingResult",
   "Presentation",
   "ProofSignOptions",
   "ProofSuite",
   "ProofVerifyOptions",
+  "RelatedResource",
   "RevocationStore",
   "SuiteKeyType",
   "VerifiableCredential",

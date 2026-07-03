@@ -72,6 +72,18 @@ export const VC_VALID_FROM = `${VC}validFrom` as const;
 export const VC_VALID_UNTIL = `${VC}validUntil` as const;
 /** `cred:credentialStatus` — Credential → a status entry (e.g. revocation list). */
 export const VC_CREDENTIAL_STATUS = `${VC}credentialStatus` as const;
+/**
+ * `cred:relatedResource` — VCDM 2.0 §5.3: a resource the credential references, with
+ * an integrity digest so the signature commits to the resource's CONTENT, not just
+ * its IRI. Used to bind a by-reference `svc:policy` document (this note's D4).
+ */
+export const VC_RELATED_RESOURCE = `${VC}relatedResource` as const;
+/** `cred:digestSRI` — a Subresource-Integrity digest (`<alg>-<base64>`) of the resource. */
+export const VC_DIGEST_SRI = `${VC}digestSRI` as const;
+/** `sec:digestMultibase` — a multibase-encoded multihash digest of the resource. */
+export const SEC_DIGEST_MULTIBASE = `${SEC}digestMultibase` as const;
+/** `schema:encodingFormat` — the `mediaType` of a related resource (how to parse it). */
+export const SCHEMA_ENCODING_FORMAT = `${SCHEMA}encodingFormat` as const;
 /** `cred:verifiableCredential` — Presentation → an embedded credential. */
 export const VC_VERIFIABLE_CREDENTIAL = `${VC}verifiableCredential` as const;
 /** `cred:holder` — Presentation → the presenting party. */

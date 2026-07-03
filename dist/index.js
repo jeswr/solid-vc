@@ -194,6 +194,10 @@ var VC_CREDENTIAL_SUBJECT = `${VC}credentialSubject`;
 var VC_VALID_FROM = `${VC}validFrom`;
 var VC_VALID_UNTIL = `${VC}validUntil`;
 var VC_CREDENTIAL_STATUS = `${VC}credentialStatus`;
+var VC_RELATED_RESOURCE = `${VC}relatedResource`;
+var VC_DIGEST_SRI = `${VC}digestSRI`;
+var SEC_DIGEST_MULTIBASE = `${SEC}digestMultibase`;
+var SCHEMA_ENCODING_FORMAT = `${SCHEMA}encodingFormat`;
 var VC_VERIFIABLE_CREDENTIAL = `${VC}verifiableCredential`;
 var VC_HOLDER = `${VC}holder`;
 var SEC_PROOF = `${SEC}proof`;
@@ -569,7 +573,24 @@ function credentialToRdf(credential) {
       writeStatus(b, subject, status);
     }
   }
+  if (credential.relatedResource !== void 0) {
+    const resources = Array.isArray(credential.relatedResource) ? credential.relatedResource : [credential.relatedResource];
+    for (const resource of resources) {
+      writeRelatedResource(b, subject, resource);
+    }
+  }
   return b.quads();
+}
+function writeRelatedResource(b, credential, resource) {
+  const node = iriRef(resource.id);
+  b.addIri(credential, VC_RELATED_RESOURCE, resource.id);
+  if (resource.digestSRI !== void 0) b.addLiteral(node, VC_DIGEST_SRI, resource.digestSRI);
+  if (resource.digestMultibase !== void 0) {
+    b.addLiteral(node, SEC_DIGEST_MULTIBASE, resource.digestMultibase);
+  }
+  if (resource.mediaType !== void 0) {
+    b.addLiteral(node, SCHEMA_ENCODING_FORMAT, resource.mediaType);
+  }
 }
 function writeStatus(b, credential, status) {
   const node = typeof status.id === "string" && status.id.length > 0 ? iriRef(status.id) : b.linkBlankNode(credential, VC_CREDENTIAL_STATUS);
@@ -630,6 +651,10 @@ function credentialToJsonLd(credential) {
     const statuses = Array.isArray(credential.credentialStatus) ? credential.credentialStatus : [credential.credentialStatus];
     doc.credentialStatus = statuses.length === 1 ? statuses[0] : statuses;
   }
+  if (credential.relatedResource !== void 0) {
+    const resources = Array.isArray(credential.relatedResource) ? credential.relatedResource : [credential.relatedResource];
+    doc.relatedResource = resources.length === 1 ? resources[0] : resources;
+  }
   return doc;
 }
 function credentialMetaFromNode(node) {
@@ -659,17 +684,33 @@ function buildAgentAuthorizationCredential(auth) {
     [SVC_ACTION]: actions.length === 1 ? actions[0] : actions
   };
   if (auth.target !== void 0) subject[SVC_TARGET] = auth.target;
-  if (auth.policy !== void 0) subject[SVC_POLICY] = auth.policy;
+  if (auth.embeddedPolicy !== void 0) {
+    subject[SVC_POLICY] = auth.embeddedPolicy;
+  } else if (auth.policy !== void 0) {
+    subject[SVC_POLICY] = auth.policy;
+  }
   const credentialSubject = { id: auth.principal, ...subject };
+  const relatedResource = policyRelatedResource(auth);
   const credential = {
     issuer: auth.principal,
     type: ["AgentAuthorizationCredential"],
     credentialSubject,
+    ...relatedResource !== void 0 ? { relatedResource } : {},
     ...auth.id !== void 0 ? { id: auth.id } : {},
     ...auth.validFrom !== void 0 ? { validFrom: auth.validFrom } : {},
     ...auth.validUntil !== void 0 ? { validUntil: auth.validUntil } : {}
   };
   return credential;
+}
+function policyRelatedResource(auth) {
+  if (auth.policy === void 0 || auth.policyDigest === void 0) return void 0;
+  const { digestSRI, digestMultibase, mediaType } = auth.policyDigest;
+  return {
+    id: auth.policy,
+    ...digestSRI !== void 0 ? { digestSRI } : {},
+    ...digestMultibase !== void 0 ? { digestMultibase } : {},
+    ...mediaType !== void 0 ? { mediaType } : {}
+  };
 }
 function agentAuthorizationFromRdf(node) {
   const meta = credentialMetaFromNode(node);
@@ -912,9 +953,115 @@ function algForJwk(jwk) {
   throw new Error(`unsupported JWK: kty=${jwk.kty} crv=${jwk.crv ?? "?"}`);
 }
 
+// src/policy-binding.ts
+import { createHash as createHash2, timingSafeEqual } from "node:crypto";
+import { base16 } from "multiformats/bases/base16";
+import { base58btc as base58btc2 } from "multiformats/bases/base58";
+import { base64, base64url } from "multiformats/bases/base64";
+import * as Digest from "multiformats/hashes/digest";
+var MULTIHASH_ALG = { 18: "sha256", 19: "sha512", 32: "sha384" };
+var SRI_ALG = { sha256: "sha256", sha384: "sha384", sha512: "sha512" };
+var MULTIBASE = base58btc2.decoder.or(base64.decoder).or(base64url.decoder).or(base16.decoder);
+async function resolveBoundPolicy(vc, options) {
+  const subject = subjectWithPolicy(vc);
+  const policyValue = subject?.[SVC_POLICY];
+  if (policyValue === void 0) return { errors: [] };
+  if (typeof policyValue === "object" && policyValue !== null) {
+    return { policy: { form: "embedded", content: policyValue }, errors: [] };
+  }
+  if (typeof policyValue !== "string") {
+    return { errors: [integrityError("svc:policy is neither an IRI nor an embedded object")] };
+  }
+  const related = relatedResourceFor(vc, policyValue);
+  if (related === void 0 || related.digestSRI === void 0 && related.digestMultibase === void 0) {
+    return {
+      errors: [
+        integrityError(`bare policy reference <${policyValue}> has no relatedResource digest (D4)`)
+      ]
+    };
+  }
+  if (options.fetch === void 0) {
+    return {
+      errors: [integrityError("no fetch injected \u2014 cannot dereference the policy (fail-closed)")]
+    };
+  }
+  let octets;
+  let mediaType;
+  try {
+    const response = await options.fetch(policyValue);
+    if (!response.ok) {
+      return { errors: [integrityError(`policy HTTP ${response.status}`)] };
+    }
+    octets = new Uint8Array(await response.arrayBuffer());
+    mediaType = related.mediaType ?? response.headers.get("content-type") ?? void 0;
+  } catch {
+    return { errors: [integrityError("policy retrieval threw")] };
+  }
+  if (!digestMatches(octets, related)) {
+    return {
+      errors: [integrityError(`policy octets do not match the signed digest for <${policyValue}>`)]
+    };
+  }
+  return {
+    policy: {
+      form: "reference",
+      iri: policyValue,
+      octets,
+      ...mediaType !== void 0 ? { mediaType } : {}
+    },
+    errors: []
+  };
+}
+function subjectWithPolicy(vc) {
+  const subjects = Array.isArray(vc.credentialSubject) ? vc.credentialSubject : [vc.credentialSubject];
+  return subjects.find((s) => s[SVC_POLICY] !== void 0);
+}
+function relatedResourceFor(vc, iri) {
+  if (vc.relatedResource === void 0) return void 0;
+  const resources = Array.isArray(vc.relatedResource) ? vc.relatedResource : [vc.relatedResource];
+  return resources.find((r) => r.id === iri);
+}
+function digestMatches(octets, related) {
+  if (related.digestSRI !== void 0 && !sriMatches(octets, related.digestSRI)) return false;
+  if (related.digestMultibase !== void 0 && !multibaseMatches(octets, related.digestMultibase)) {
+    return false;
+  }
+  return true;
+}
+function sriMatches(octets, digestSRI) {
+  const dash = digestSRI.indexOf("-");
+  if (dash === -1) return false;
+  const alg = SRI_ALG[digestSRI.slice(0, dash)];
+  if (alg === void 0) return false;
+  let expected;
+  try {
+    expected = Buffer.from(digestSRI.slice(dash + 1), "base64");
+  } catch {
+    return false;
+  }
+  const actual = createHash2(alg).update(octets).digest();
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+function multibaseMatches(octets, digestMultibase) {
+  let digest;
+  try {
+    digest = Digest.decode(MULTIBASE.decode(digestMultibase));
+  } catch {
+    return false;
+  }
+  const alg = MULTIHASH_ALG[digest.code];
+  if (alg === void 0) return false;
+  const actual = createHash2(alg).update(octets).digest();
+  const expected = Buffer.from(digest.digest);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+function integrityError(message) {
+  return { code: "POLICY_INTEGRITY", message };
+}
+
 // src/status-list.ts
 import { gunzipSync } from "node:zlib";
-import { base64url } from "multiformats/bases/base64";
+import { base64url as base64url2 } from "multiformats/bases/base64";
 var MIN_BITSTRING_ENTRIES = 131072;
 async function checkCredentialStatus(params) {
   const errors = [];
@@ -1021,7 +1168,7 @@ async function fetchStatusList(entry, purpose, params, fetch) {
   return { bytes };
 }
 function decodeBitstring(encodedList) {
-  const compressed = base64url.decode(encodedList);
+  const compressed = base64url2.decode(encodedList);
   return new Uint8Array(gunzipSync(compressed));
 }
 function bitAt(bytes, index) {
@@ -1378,6 +1525,7 @@ export {
   parseCredentialRdf,
   prefixControlledBy,
   proofOptionsQuads,
+  resolveBoundPolicy,
   serialize2 as serialize,
   signedCredentialToRdf,
   signedCredentialToTurtle,

@@ -14,8 +14,14 @@ import { TermWrapper } from '@rdfjs/wrapper';
 export interface AgentAuthorization {
     readonly action: string | readonly string[];
     readonly agent: string;
+    readonly embeddedPolicy?: JsonValue;
     readonly id?: string;
     readonly policy?: string;
+    readonly policyDigest?: {
+        readonly digestSRI?: string;
+        readonly digestMultibase?: string;
+        readonly mediaType?: string;
+    };
     readonly principal: string;
     readonly target?: string;
     readonly validFrom?: string;
@@ -32,6 +38,17 @@ export function base58btcDecode(value: string): Uint8Array;
 export function base58btcEncode(bytes: Uint8Array): string;
 
 // @public
+export type BoundPolicy = {
+    readonly form: "embedded";
+    readonly content: JsonValue;
+} | {
+    readonly form: "reference";
+    readonly iri: string;
+    readonly octets: Uint8Array;
+    readonly mediaType?: string;
+};
+
+// @public
 export function buildAgentAuthorizationCredential(auth: AgentAuthorization): Credential_2;
 
 // @public
@@ -46,6 +63,7 @@ interface Credential_2 {
     readonly credentialSubject: CredentialSubject | readonly CredentialSubject[];
     readonly id?: string;
     readonly issuer: string;
+    readonly relatedResource?: RelatedResource | readonly RelatedResource[];
     readonly type?: readonly string[];
     readonly validFrom?: string;
     readonly validUntil?: string;
@@ -216,6 +234,12 @@ export interface ParsedVerification extends VerificationResult {
 }
 
 // @public
+export interface PolicyBindingResult {
+    readonly errors: readonly VerificationError[];
+    readonly policy?: BoundPolicy;
+}
+
+// @public
 export function prefixControlledBy(verificationMethod: string, issuer: string): boolean;
 
 // @public
@@ -275,6 +299,19 @@ export interface ProofSuite {
 export interface ProofVerifyOptions {
     resolveKey(verificationMethod: string): Promise<CryptoKey | undefined> | CryptoKey | undefined;
 }
+
+// @public
+export interface RelatedResource {
+    readonly digestMultibase?: string;
+    readonly digestSRI?: string;
+    readonly id: string;
+    readonly mediaType?: string;
+}
+
+// @public
+export function resolveBoundPolicy(vc: VerifiableCredential, options: {
+    readonly fetch?: FetchPort;
+}): Promise<PolicyBindingResult>;
 
 // @public
 export interface RevocationStore {
@@ -337,7 +374,7 @@ export interface VerificationError {
 }
 
 // @public
-export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR";
+export type VerificationErrorCode = "MALFORMED" | "NO_PROOF" | "UNKNOWN_CRYPTOSUITE" | "INVALID_SIGNATURE" | "EXPIRED" | "NOT_YET_VALID" | "ISSUER_MISMATCH" | "PROOF_PURPOSE_MISMATCH" | "UNTRUSTED_ISSUER" | "REVOKED" | "SUSPENDED" | "STATUS_RETRIEVAL_ERROR" | "POLICY_INTEGRITY";
 
 // @public
 export interface VerificationResult {

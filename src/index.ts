@@ -77,6 +77,12 @@ export {
   type SuiteKeyType,
 } from "./keys.js";
 export { base58btcDecode, base58btcEncode } from "./multibase.js";
+// --- policy-content binding (embedded, or relatedResource digest) ----------
+export {
+  type BoundPolicy,
+  type PolicyBindingResult,
+  resolveBoundPolicy,
+} from "./policy-binding.js";
 // --- the pluggable proof-suite seam ----------------------------------------
 export {
   DataIntegritySuite,
@@ -99,6 +105,7 @@ export type {
   JsonValue,
   KeyPair,
   Presentation,
+  RelatedResource,
   RevocationStore,
   VerifiableCredential,
   VerifiablePresentation,

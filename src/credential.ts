@@ -17,13 +17,16 @@ import type {
   CredentialSubject,
   DataIntegrityProof,
   JsonValue,
+  RelatedResource,
   VerifiableCredential,
 } from "./types.js";
 import {
   DC_CREATED,
+  SCHEMA_ENCODING_FORMAT,
   SEC,
   SEC_CRYPTOSUITE,
   SEC_DATA_INTEGRITY_PROOF,
+  SEC_DIGEST_MULTIBASE,
   SEC_PROOF,
   SEC_PROOF_PURPOSE,
   SEC_PROOF_VALUE,
@@ -41,7 +44,9 @@ import {
   VC_CREDENTIAL,
   VC_CREDENTIAL_STATUS,
   VC_CREDENTIAL_SUBJECT,
+  VC_DIGEST_SRI,
   VC_ISSUER,
+  VC_RELATED_RESOURCE,
   VC_VALID_FROM,
   VC_VALID_UNTIL,
   XSD,
@@ -169,7 +174,36 @@ export function credentialToRdf(credential: Credential): Quad[] {
       writeStatus(b, subject, status);
     }
   }
+  if (credential.relatedResource !== undefined) {
+    const resources = Array.isArray(credential.relatedResource)
+      ? credential.relatedResource
+      : [credential.relatedResource];
+    for (const resource of resources) {
+      writeRelatedResource(b, subject, resource);
+    }
+  }
   return b.quads();
+}
+
+/**
+ * Lower one VCDM 2.0 `relatedResource` entry UNDER the credential (so its integrity
+ * digest is signed). The resource IRI is the node; `digestSRI` / `digestMultibase` /
+ * `mediaType` are literals — the proof then commits to the referenced content.
+ */
+function writeRelatedResource(
+  b: GraphBuilder,
+  credential: NodeRef,
+  resource: RelatedResource,
+): void {
+  const node = iriRef(resource.id);
+  b.addIri(credential, VC_RELATED_RESOURCE, resource.id);
+  if (resource.digestSRI !== undefined) b.addLiteral(node, VC_DIGEST_SRI, resource.digestSRI);
+  if (resource.digestMultibase !== undefined) {
+    b.addLiteral(node, SEC_DIGEST_MULTIBASE, resource.digestMultibase);
+  }
+  if (resource.mediaType !== undefined) {
+    b.addLiteral(node, SCHEMA_ENCODING_FORMAT, resource.mediaType);
+  }
 }
 
 /**
@@ -270,6 +304,12 @@ export function credentialToJsonLd(credential: Credential): Record<string, unkno
       : [credential.credentialStatus];
     doc.credentialStatus = statuses.length === 1 ? statuses[0] : statuses;
   }
+  if (credential.relatedResource !== undefined) {
+    const resources = Array.isArray(credential.relatedResource)
+      ? credential.relatedResource
+      : [credential.relatedResource];
+    doc.relatedResource = resources.length === 1 ? resources[0] : resources;
+  }
   return doc;
 }
 
@@ -330,19 +370,40 @@ export function buildAgentAuthorizationCredential(auth: AgentAuthorization): Cre
     [SVC_ACTION]: actions.length === 1 ? (actions[0] as string) : (actions as JsonValue),
   };
   if (auth.target !== undefined) subject[SVC_TARGET] = auth.target;
-  if (auth.policy !== undefined) subject[SVC_POLICY] = auth.policy;
+  // Policy binding (this note's D4): an EMBEDDED policy graph is signed inline; a
+  // by-reference IRI is bound by a `relatedResource` digest (below); a bare IRI is
+  // emitted only when no digest is supplied — and a conforming verifier rejects it.
+  if (auth.embeddedPolicy !== undefined) {
+    subject[SVC_POLICY] = auth.embeddedPolicy;
+  } else if (auth.policy !== undefined) {
+    subject[SVC_POLICY] = auth.policy;
+  }
   // The subject `id` is the principal: the WebID that holds the authority and is
   // delegating it. The credential ASSERTS, signed by the same WebID as issuer.
   const credentialSubject: CredentialSubject = { id: auth.principal, ...subject };
+  const relatedResource = policyRelatedResource(auth);
   const credential: Credential = {
     issuer: auth.principal,
     type: ["AgentAuthorizationCredential"],
     credentialSubject,
+    ...(relatedResource !== undefined ? { relatedResource } : {}),
     ...(auth.id !== undefined ? { id: auth.id } : {}),
     ...(auth.validFrom !== undefined ? { validFrom: auth.validFrom } : {}),
     ...(auth.validUntil !== undefined ? { validUntil: auth.validUntil } : {}),
   };
   return credential;
+}
+
+/** The `relatedResource` digest entry for a by-reference policy IRI, if a digest is given. */
+function policyRelatedResource(auth: AgentAuthorization): RelatedResource | undefined {
+  if (auth.policy === undefined || auth.policyDigest === undefined) return undefined;
+  const { digestSRI, digestMultibase, mediaType } = auth.policyDigest;
+  return {
+    id: auth.policy,
+    ...(digestSRI !== undefined ? { digestSRI } : {}),
+    ...(digestMultibase !== undefined ? { digestMultibase } : {}),
+    ...(mediaType !== undefined ? { mediaType } : {}),
+  };
 }
 
 /**

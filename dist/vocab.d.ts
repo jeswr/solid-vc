@@ -46,6 +46,18 @@ export declare const VC_VALID_FROM: "https://www.w3.org/2018/credentials#validFr
 export declare const VC_VALID_UNTIL: "https://www.w3.org/2018/credentials#validUntil";
 /** `cred:credentialStatus` — Credential → a status entry (e.g. revocation list). */
 export declare const VC_CREDENTIAL_STATUS: "https://www.w3.org/2018/credentials#credentialStatus";
+/**
+ * `cred:relatedResource` — VCDM 2.0 §5.3: a resource the credential references, with
+ * an integrity digest so the signature commits to the resource's CONTENT, not just
+ * its IRI. Used to bind a by-reference `svc:policy` document (this note's D4).
+ */
+export declare const VC_RELATED_RESOURCE: "https://www.w3.org/2018/credentials#relatedResource";
+/** `cred:digestSRI` — a Subresource-Integrity digest (`<alg>-<base64>`) of the resource. */
+export declare const VC_DIGEST_SRI: "https://www.w3.org/2018/credentials#digestSRI";
+/** `sec:digestMultibase` — a multibase-encoded multihash digest of the resource. */
+export declare const SEC_DIGEST_MULTIBASE: "https://w3id.org/security#digestMultibase";
+/** `schema:encodingFormat` — the `mediaType` of a related resource (how to parse it). */
+export declare const SCHEMA_ENCODING_FORMAT: "https://schema.org/encodingFormat";
 /** `cred:verifiableCredential` — Presentation → an embedded credential. */
 export declare const VC_VERIFIABLE_CREDENTIAL: "https://www.w3.org/2018/credentials#verifiableCredential";
 /** `cred:holder` — Presentation → the presenting party. */
