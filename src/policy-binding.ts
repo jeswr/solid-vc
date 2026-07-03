@@ -20,19 +20,25 @@
 // the small reviewed code here.
 
 import { createHash, timingSafeEqual } from "node:crypto";
+import type { Quad } from "@rdfjs/types";
 import { base16 } from "multiformats/bases/base16";
 import { base58btc } from "multiformats/bases/base58";
 import { base64, base64url } from "multiformats/bases/base64";
 import * as Digest from "multiformats/hashes/digest";
 import type { FetchPort } from "./fetch-port.js";
 import type {
-  CredentialSubject,
   JsonValue,
   RelatedResource,
   VerifiableCredential,
   VerificationError,
 } from "./types.js";
-import { SVC_POLICY } from "./vocab.js";
+import {
+  SCHEMA_ENCODING_FORMAT,
+  SEC_DIGEST_MULTIBASE,
+  SVC_POLICY,
+  VC_DIGEST_SRI,
+  VC_RELATED_RESOURCE,
+} from "./vocab.js";
 
 /** The verified binding of a credential's `svc:policy`. */
 export type BoundPolicy =
@@ -71,9 +77,16 @@ export async function resolveBoundPolicy(
   vc: VerifiableCredential,
   options: { readonly fetch?: FetchPort },
 ): Promise<PolicyBindingResult> {
-  const subject = subjectWithPolicy(vc);
-  const policyValue = subject?.[SVC_POLICY];
-  if (policyValue === undefined) return { errors: [] };
+  const policyValues = policyClaimsOf(vc);
+  if (policyValues.length === 0) return { errors: [] };
+  // One hop per credential (this note's §"Issuance requirements"): several policy
+  // claims are ambiguous and must not pass on the strength of one valid one.
+  if (policyValues.length > 1) {
+    return {
+      errors: [integrityError("credential binds multiple policies (one hop per credential)")],
+    };
+  }
+  const policyValue = policyValues[0];
 
   // EMBEDDED: an inline object is signed as part of the claim graph.
   if (typeof policyValue === "object" && policyValue !== null) {
@@ -85,14 +98,21 @@ export async function resolveBoundPolicy(
 
   // BY REFERENCE: require a relatedResource digest for this exact IRI.
   const related = relatedResourceFor(vc, policyValue);
+  return referenceBinding(policyValue, related, options);
+}
+
+/** Verify a by-reference policy IRI against its relatedResource digest, or POLICY_INTEGRITY. */
+async function referenceBinding(
+  iri: string,
+  related: RelatedResource | undefined,
+  options: { readonly fetch?: FetchPort },
+): Promise<PolicyBindingResult> {
   if (
     related === undefined ||
     (related.digestSRI === undefined && related.digestMultibase === undefined)
   ) {
     return {
-      errors: [
-        integrityError(`bare policy reference <${policyValue}> has no relatedResource digest (D4)`),
-      ],
+      errors: [integrityError(`bare policy reference <${iri}> has no relatedResource digest (D4)`)],
     };
   }
   if (options.fetch === undefined) {
@@ -104,7 +124,7 @@ export async function resolveBoundPolicy(
   let octets: Uint8Array;
   let mediaType: string | undefined;
   try {
-    const response = await options.fetch(policyValue);
+    const response = await options.fetch(iri);
     if (!response.ok) {
       return { errors: [integrityError(`policy HTTP ${response.status}`)] };
     }
@@ -116,33 +136,39 @@ export async function resolveBoundPolicy(
 
   if (!digestMatches(octets, related)) {
     return {
-      errors: [integrityError(`policy octets do not match the signed digest for <${policyValue}>`)],
+      errors: [integrityError(`policy octets do not match the signed digest for <${iri}>`)],
     };
   }
   return {
-    policy: {
-      form: "reference",
-      iri: policyValue,
-      octets,
-      ...(mediaType !== undefined ? { mediaType } : {}),
-    },
+    policy: { form: "reference", iri, octets, ...(mediaType !== undefined ? { mediaType } : {}) },
     errors: [],
   };
 }
 
-/** The single credential subject carrying an `svc:policy`, or `undefined`. */
-function subjectWithPolicy(vc: VerifiableCredential): CredentialSubject | undefined {
+/** Every `svc:policy` claim across the credential's subjects (each subject may carry one). */
+function policyClaimsOf(vc: VerifiableCredential): JsonValue[] {
   const subjects = Array.isArray(vc.credentialSubject)
     ? vc.credentialSubject
     : [vc.credentialSubject];
-  return subjects.find((s) => s[SVC_POLICY] !== undefined);
+  const out: JsonValue[] = [];
+  for (const s of subjects) {
+    if (s === null || typeof s !== "object") continue;
+    const value = s[SVC_POLICY];
+    if (value !== undefined) out.push(value);
+  }
+  return out;
 }
 
-/** The `relatedResource` entry whose `id` matches the policy IRI, or `undefined`. */
+/** The `relatedResource` entry whose `id` matches the policy IRI (malformed entries skipped). */
 function relatedResourceFor(vc: VerifiableCredential, iri: string): RelatedResource | undefined {
   if (vc.relatedResource === undefined) return undefined;
   const resources = Array.isArray(vc.relatedResource) ? vc.relatedResource : [vc.relatedResource];
-  return resources.find((r) => r.id === iri);
+  // Runtime-validate each entry: an untrusted VC may carry `relatedResource: [null]` or
+  // a non-object, which must fail closed (skip), never throw on `r.id` access.
+  return resources.find(
+    (r): r is RelatedResource =>
+      r !== null && typeof r === "object" && (r as { id?: unknown }).id === iri,
+  );
 }
 
 /** Whether `octets` match the entry's `digestSRI` and/or `digestMultibase` (all present must hold). */
@@ -188,4 +214,83 @@ function multibaseMatches(octets: Uint8Array, digestMultibase: string): boolean 
 /** Build a POLICY_INTEGRITY error with a message. */
 function integrityError(message: string): VerificationError {
   return { code: "POLICY_INTEGRITY", message };
+}
+
+/** The predicates that carry a relatedResource DIGEST (not a policy description). */
+const DIGEST_PREDICATES = new Set<string>([
+  VC_DIGEST_SRI,
+  SEC_DIGEST_MULTIBASE,
+  SCHEMA_ENCODING_FORMAT,
+]);
+
+/**
+ * Enforce policy-content binding over the SIGNED quads of a parsed VC (the RDF-graph
+ * counterpart of {@link resolveBoundPolicy}, for {@link parseAndVerifyCredential}).
+ * Returns POLICY_INTEGRITY errors (empty when the single `svc:policy` is embedded or a
+ * digest-verified reference). Reads ONLY the signed, proof-stripped quads.
+ */
+export async function policyBindingErrorsFromQuads(
+  signedQuads: readonly Quad[],
+  options: { readonly fetch?: FetchPort },
+): Promise<VerificationError[]> {
+  const policyQuads = signedQuads.filter((q) => q.predicate.value === SVC_POLICY);
+  if (policyQuads.length === 0) return [];
+  if (policyQuads.length > 1) {
+    return [integrityError("credential binds multiple policies (one hop per credential)")];
+  }
+  const object = (policyQuads[0] as Quad).object;
+  // An embedded policy is a blank node (always described inline) — accept.
+  if (object.termType === "BlankNode") return [];
+  if (object.termType !== "NamedNode") {
+    return [integrityError("svc:policy object is neither an IRI nor an embedded node")];
+  }
+  const iri = object.value;
+
+  // A relatedResource digest for this IRI → verify by reference.
+  const related = relatedResourceFromQuads(signedQuads, iri);
+  if (
+    related !== undefined &&
+    (related.digestSRI !== undefined || related.digestMultibase !== undefined)
+  ) {
+    const result = await referenceBinding(iri, related, options);
+    return [...result.errors];
+  }
+
+  // An IRI described inline (subject of non-digest, non-policy triples) → embedded.
+  const describedInline = signedQuads.some(
+    (q) =>
+      q.subject.value === iri &&
+      q.predicate.value !== SVC_POLICY &&
+      !DIGEST_PREDICATES.has(q.predicate.value),
+  );
+  if (describedInline) return [];
+
+  // Otherwise: a bare, digest-less, undescribed reference.
+  return [integrityError(`bare policy reference <${iri}> has no relatedResource digest (D4)`)];
+}
+
+/** Read the relatedResource digest entry for `iri` from the signed quads, if present. */
+function relatedResourceFromQuads(
+  signedQuads: readonly Quad[],
+  iri: string,
+): RelatedResource | undefined {
+  const linked = signedQuads.some(
+    (q) => q.predicate.value === VC_RELATED_RESOURCE && q.object.value === iri,
+  );
+  if (!linked) return undefined;
+  let digestSRI: string | undefined;
+  let digestMultibase: string | undefined;
+  let mediaType: string | undefined;
+  for (const q of signedQuads) {
+    if (q.subject.value !== iri || q.object.termType !== "Literal") continue;
+    if (q.predicate.value === VC_DIGEST_SRI) digestSRI = q.object.value;
+    else if (q.predicate.value === SEC_DIGEST_MULTIBASE) digestMultibase = q.object.value;
+    else if (q.predicate.value === SCHEMA_ENCODING_FORMAT) mediaType = q.object.value;
+  }
+  return {
+    id: iri,
+    ...(digestSRI !== undefined ? { digestSRI } : {}),
+    ...(digestMultibase !== undefined ? { digestMultibase } : {}),
+    ...(mediaType !== undefined ? { mediaType } : {}),
+  };
 }

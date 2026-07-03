@@ -9,10 +9,14 @@ import { createHash } from "node:crypto";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "multiformats/hashes/sha2";
 import { describe, expect, it } from "vitest";
+import { prefixControlledBy } from "../src/controller.js";
+import { signedCredentialToTurtle } from "../src/credential.js";
 import type { FetchPort, HttpResponse } from "../src/fetch-port.js";
 import { issueAgentAuthorization } from "../src/issue.js";
 import { resolveBoundPolicy } from "../src/policy-binding.js";
-import { ACL_READ, AGENT, ISSUER, issuerKey } from "./helpers.js";
+import { verifyCredential } from "../src/verify.js";
+import { parseAndVerifyCredential } from "../src/verify-rdf.js";
+import { ACL_READ, AGENT, ISSUER, issuerKey, keyResolver } from "./helpers.js";
 
 const POLICY_URL = "https://alice.example/policies/p1.ttl";
 const POLICY_BODY =
@@ -146,5 +150,73 @@ describe("resolveBoundPolicy — no policy", () => {
     const result = await resolveBoundPolicy(vc, {});
     expect(result.policy).toBeUndefined();
     expect(result.errors).toEqual([]);
+  });
+});
+
+describe("verifyCredential ENFORCES policy binding (the High finding)", () => {
+  it("REJECTS a bare-policy agent-authz credential with POLICY_INTEGRITY", async () => {
+    const key = await issuerKey();
+    const vc = await issueAgentAuthorization({ ...BASE, policy: POLICY_URL }, key);
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+      fetch: fakeFetch({ [POLICY_URL]: POLICY_OCTETS }),
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("POLICY_INTEGRITY");
+  });
+
+  it("ACCEPTS an embedded-policy credential (no fetch needed)", async () => {
+    const key = await issuerKey();
+    const vc = await issueAgentAuthorization(
+      { ...BASE, embeddedPolicy: { "http://www.w3.org/ns/odrl/2/uid": POLICY_URL } },
+      key,
+    );
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
+    expect(result.verified).toBe(true);
+  });
+
+  it("ACCEPTS a digest-referenced policy whose octets match", async () => {
+    const key = await issuerKey();
+    const vc = await issueAgentAuthorization(
+      { ...BASE, policy: POLICY_URL, policyDigest: { digestSRI: sriOf(POLICY_OCTETS) } },
+      key,
+    );
+    const result = await verifyCredential(vc, {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+      fetch: fakeFetch({ [POLICY_URL]: POLICY_OCTETS }),
+    });
+    expect(result.verified).toBe(true);
+  });
+
+  it("parseAndVerifyCredential also REJECTS a bare-policy credential (RDF path)", async () => {
+    const key = await issuerKey();
+    const vc = await issueAgentAuthorization({ ...BASE, policy: POLICY_URL }, key);
+    const ttl = await signedCredentialToTurtle(vc);
+    const result = await parseAndVerifyCredential(ttl, "text/turtle", {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.errors.map((e) => e.code)).toContain("POLICY_INTEGRITY");
+  });
+
+  it("parseAndVerifyCredential ACCEPTS a digest-referenced policy (RDF path)", async () => {
+    const key = await issuerKey();
+    const vc = await issueAgentAuthorization(
+      { ...BASE, policy: POLICY_URL, policyDigest: { digestSRI: sriOf(POLICY_OCTETS) } },
+      key,
+    );
+    const ttl = await signedCredentialToTurtle(vc);
+    const result = await parseAndVerifyCredential(ttl, "text/turtle", {
+      resolveKey: keyResolver(key),
+      isControlledBy: prefixControlledBy,
+      fetch: fakeFetch({ [POLICY_URL]: POLICY_OCTETS }),
+    });
+    expect(result.verified).toBe(true);
   });
 });

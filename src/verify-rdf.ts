@@ -16,6 +16,7 @@
 
 import { parseRdf } from "@jeswr/fetch-rdf";
 import type { DatasetCore, Quad } from "@rdfjs/types";
+import { policyBindingErrorsFromQuads } from "./policy-binding.js";
 import { defaultSuiteRegistry } from "./proof.js";
 import { checkCredentialStatus } from "./status-list.js";
 import type {
@@ -152,23 +153,29 @@ export async function parseAndVerifyCredential(
   // proof / issuer-binding / validity / trust have not been established. Skipped when
   // explicitly disabled (e.g. verifying a status-list credential itself, to avoid
   // recursion).
-  if (options.checkStatus !== false && errors.length === 0) {
-    const entries = readStatusEntries(dataset, node.value);
-    if (entries.length > 0) {
-      errors.push(
-        ...(await checkCredentialStatus({
-          entries,
-          credentialId: node.value,
-          issuer,
-          now,
-          fetch: options.fetch,
-          revocationStore: options.revocationStore,
-          registry,
-          resolveKey: options.resolveKey,
-          isControlledBy: options.isControlledBy,
-          verifyStatusCredential: parseAndVerifyCredential,
-        })),
-      );
+  if (errors.length === 0) {
+    if (options.checkStatus !== false) {
+      const entries = readStatusEntries(dataset, node.value);
+      if (entries.length > 0) {
+        errors.push(
+          ...(await checkCredentialStatus({
+            entries,
+            credentialId: node.value,
+            issuer,
+            now,
+            fetch: options.fetch,
+            revocationStore: options.revocationStore,
+            registry,
+            resolveKey: options.resolveKey,
+            isControlledBy: options.isControlledBy,
+            verifyStatusCredential: parseAndVerifyCredential,
+          })),
+        );
+      }
+    }
+    // Policy-content binding over the SIGNED quads (parity with verifyCredential).
+    if (options.checkPolicyBinding !== false) {
+      errors.push(...(await policyBindingErrorsFromQuads(documentQuads, { fetch: options.fetch })));
     }
   }
 

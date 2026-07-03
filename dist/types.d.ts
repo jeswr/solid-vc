@@ -242,6 +242,14 @@ export interface VerifyOptions {
      */
     readonly checkStatus?: boolean;
     /**
+     * Whether to ENFORCE policy-content binding (this note's D4) when the credential
+     * carries an `svc:policy` (default `true`). When on, a bare (digest-less) policy
+     * reference makes verification fail with `POLICY_INTEGRITY`, and a by-reference
+     * policy is dereferenced + digest-checked through the injected `fetch`. An embedded
+     * policy needs no fetch. A credential without `svc:policy` is unaffected.
+     */
+    readonly checkPolicyBinding?: boolean;
+    /**
      * A monotonic revocation memory for the `"revocation"` purpose (this note's D7):
      * once a credential has been observed revoked, a later CLEAR bit MUST NOT un-revoke
      * it (closing the "attacker briefly flips the bit back during a cache window" replay).

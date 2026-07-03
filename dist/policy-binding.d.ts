@@ -1,3 +1,4 @@
+import type { Quad } from "@rdfjs/types";
 import type { FetchPort } from "./fetch-port.js";
 import type { JsonValue, VerifiableCredential, VerificationError } from "./types.js";
 /** The verified binding of a credential's `svc:policy`. */
@@ -27,4 +28,13 @@ export interface PolicyBindingResult {
 export declare function resolveBoundPolicy(vc: VerifiableCredential, options: {
     readonly fetch?: FetchPort;
 }): Promise<PolicyBindingResult>;
+/**
+ * Enforce policy-content binding over the SIGNED quads of a parsed VC (the RDF-graph
+ * counterpart of {@link resolveBoundPolicy}, for {@link parseAndVerifyCredential}).
+ * Returns POLICY_INTEGRITY errors (empty when the single `svc:policy` is embedded or a
+ * digest-verified reference). Reads ONLY the signed, proof-stripped quads.
+ */
+export declare function policyBindingErrorsFromQuads(signedQuads: readonly Quad[], options: {
+    readonly fetch?: FetchPort;
+}): Promise<VerificationError[]>;
 //# sourceMappingURL=policy-binding.d.ts.map

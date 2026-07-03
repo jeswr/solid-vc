@@ -26,6 +26,7 @@
 
 import type { ControlledByCheck } from "./controller.js";
 import { credentialToRdf } from "./credential.js";
+import { resolveBoundPolicy } from "./policy-binding.js";
 import type { ProofVerifyOptions, SuiteRegistry } from "./proof.js";
 import { defaultSuiteRegistry } from "./proof.js";
 import { checkCredentialStatus } from "./status-list.js";
@@ -149,28 +150,39 @@ export async function verifyCredential(
     })),
   );
 
-  // 9. Bitstring Status List status gate (revocation / suspension). Run ONLY after
-  // the core gates passed (errors empty): we must not dereference a status pointer,
-  // nor trust the (otherwise-signed) status entry, from a credential whose proof /
-  // issuer-binding / validity / trust have not been established — otherwise a tampered
-  // or untrusted credential could drive outbound fetches through the verifier. Skipped
-  // when explicitly disabled (checkStatus === false); a skipped check is an accept.
-  const statusEntries = statusEntriesOf(vc);
-  if (statusEntries.length > 0 && options.checkStatus !== false && errors.length === 0) {
-    errors.push(
-      ...(await checkCredentialStatus({
-        entries: statusEntries,
-        credentialId: typeof vc.id === "string" ? vc.id : undefined,
-        issuer,
-        now,
-        fetch: options.fetch,
-        revocationStore: options.revocationStore,
-        registry,
-        resolveKey: options.resolveKey,
-        isControlledBy: options.isControlledBy,
-        verifyStatusCredential: parseAndVerifyCredential,
-      })),
-    );
+  // Gates 9–10 run ONLY after the core gates passed (errors empty): we must not
+  // dereference a status/policy pointer, nor trust the (otherwise-signed) status entry
+  // or policy claim, from a credential whose proof / issuer-binding / validity / trust
+  // have not been established — otherwise a tampered or untrusted credential could
+  // drive outbound fetches through the verifier.
+  if (errors.length === 0) {
+    // 9. Bitstring Status List status gate (revocation / suspension). Skipped when
+    //    explicitly disabled (checkStatus === false); a skipped check is an accept.
+    const statusEntries = statusEntriesOf(vc);
+    if (statusEntries.length > 0 && options.checkStatus !== false) {
+      errors.push(
+        ...(await checkCredentialStatus({
+          entries: statusEntries,
+          credentialId: typeof vc.id === "string" ? vc.id : undefined,
+          issuer,
+          now,
+          fetch: options.fetch,
+          revocationStore: options.revocationStore,
+          registry,
+          resolveKey: options.resolveKey,
+          isControlledBy: options.isControlledBy,
+          verifyStatusCredential: parseAndVerifyCredential,
+        })),
+      );
+    }
+
+    // 10. Policy-content binding (this note's D4): an svc:policy MUST be embedded or a
+    //     digest-verified reference — a bare IRI reference is POLICY_INTEGRITY. Skipped
+    //     when explicitly disabled (checkPolicyBinding === false).
+    if (options.checkPolicyBinding !== false) {
+      const policyResult = await resolveBoundPolicy(vc, { fetch: options.fetch });
+      errors.push(...policyResult.errors);
+    }
   }
 
   return errors.length === 0

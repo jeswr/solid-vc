@@ -971,9 +971,14 @@ var MULTIHASH_ALG = { 18: "sha256", 19: "sha512", 32: "sha384" };
 var SRI_ALG = { sha256: "sha256", sha384: "sha384", sha512: "sha512" };
 var MULTIBASE = base58btc2.decoder.or(base64.decoder).or(base64url.decoder).or(base16.decoder);
 async function resolveBoundPolicy(vc, options) {
-  const subject = subjectWithPolicy(vc);
-  const policyValue = subject?.[SVC_POLICY];
-  if (policyValue === void 0) return { errors: [] };
+  const policyValues = policyClaimsOf(vc);
+  if (policyValues.length === 0) return { errors: [] };
+  if (policyValues.length > 1) {
+    return {
+      errors: [integrityError("credential binds multiple policies (one hop per credential)")]
+    };
+  }
+  const policyValue = policyValues[0];
   if (typeof policyValue === "object" && policyValue !== null) {
     return { policy: { form: "embedded", content: policyValue }, errors: [] };
   }
@@ -981,11 +986,12 @@ async function resolveBoundPolicy(vc, options) {
     return { errors: [integrityError("svc:policy is neither an IRI nor an embedded object")] };
   }
   const related = relatedResourceFor(vc, policyValue);
+  return referenceBinding(policyValue, related, options);
+}
+async function referenceBinding(iri, related, options) {
   if (related === void 0 || related.digestSRI === void 0 && related.digestMultibase === void 0) {
     return {
-      errors: [
-        integrityError(`bare policy reference <${policyValue}> has no relatedResource digest (D4)`)
-      ]
+      errors: [integrityError(`bare policy reference <${iri}> has no relatedResource digest (D4)`)]
     };
   }
   if (options.fetch === void 0) {
@@ -996,7 +1002,7 @@ async function resolveBoundPolicy(vc, options) {
   let octets;
   let mediaType;
   try {
-    const response = await options.fetch(policyValue);
+    const response = await options.fetch(iri);
     if (!response.ok) {
       return { errors: [integrityError(`policy HTTP ${response.status}`)] };
     }
@@ -1007,27 +1013,30 @@ async function resolveBoundPolicy(vc, options) {
   }
   if (!digestMatches(octets, related)) {
     return {
-      errors: [integrityError(`policy octets do not match the signed digest for <${policyValue}>`)]
+      errors: [integrityError(`policy octets do not match the signed digest for <${iri}>`)]
     };
   }
   return {
-    policy: {
-      form: "reference",
-      iri: policyValue,
-      octets,
-      ...mediaType !== void 0 ? { mediaType } : {}
-    },
+    policy: { form: "reference", iri, octets, ...mediaType !== void 0 ? { mediaType } : {} },
     errors: []
   };
 }
-function subjectWithPolicy(vc) {
+function policyClaimsOf(vc) {
   const subjects = Array.isArray(vc.credentialSubject) ? vc.credentialSubject : [vc.credentialSubject];
-  return subjects.find((s) => s[SVC_POLICY] !== void 0);
+  const out = [];
+  for (const s of subjects) {
+    if (s === null || typeof s !== "object") continue;
+    const value = s[SVC_POLICY];
+    if (value !== void 0) out.push(value);
+  }
+  return out;
 }
 function relatedResourceFor(vc, iri) {
   if (vc.relatedResource === void 0) return void 0;
   const resources = Array.isArray(vc.relatedResource) ? vc.relatedResource : [vc.relatedResource];
-  return resources.find((r) => r.id === iri);
+  return resources.find(
+    (r) => r !== null && typeof r === "object" && r.id === iri
+  );
 }
 function digestMatches(octets, related) {
   if (related.digestSRI !== void 0 && !sriMatches(octets, related.digestSRI)) return false;
@@ -1065,6 +1074,55 @@ function multibaseMatches(octets, digestMultibase) {
 }
 function integrityError(message) {
   return { code: "POLICY_INTEGRITY", message };
+}
+var DIGEST_PREDICATES = /* @__PURE__ */ new Set([
+  VC_DIGEST_SRI,
+  SEC_DIGEST_MULTIBASE,
+  SCHEMA_ENCODING_FORMAT
+]);
+async function policyBindingErrorsFromQuads(signedQuads, options) {
+  const policyQuads = signedQuads.filter((q) => q.predicate.value === SVC_POLICY);
+  if (policyQuads.length === 0) return [];
+  if (policyQuads.length > 1) {
+    return [integrityError("credential binds multiple policies (one hop per credential)")];
+  }
+  const object = policyQuads[0].object;
+  if (object.termType === "BlankNode") return [];
+  if (object.termType !== "NamedNode") {
+    return [integrityError("svc:policy object is neither an IRI nor an embedded node")];
+  }
+  const iri = object.value;
+  const related = relatedResourceFromQuads(signedQuads, iri);
+  if (related !== void 0 && (related.digestSRI !== void 0 || related.digestMultibase !== void 0)) {
+    const result = await referenceBinding(iri, related, options);
+    return [...result.errors];
+  }
+  const describedInline = signedQuads.some(
+    (q) => q.subject.value === iri && q.predicate.value !== SVC_POLICY && !DIGEST_PREDICATES.has(q.predicate.value)
+  );
+  if (describedInline) return [];
+  return [integrityError(`bare policy reference <${iri}> has no relatedResource digest (D4)`)];
+}
+function relatedResourceFromQuads(signedQuads, iri) {
+  const linked = signedQuads.some(
+    (q) => q.predicate.value === VC_RELATED_RESOURCE && q.object.value === iri
+  );
+  if (!linked) return void 0;
+  let digestSRI;
+  let digestMultibase;
+  let mediaType;
+  for (const q of signedQuads) {
+    if (q.subject.value !== iri || q.object.termType !== "Literal") continue;
+    if (q.predicate.value === VC_DIGEST_SRI) digestSRI = q.object.value;
+    else if (q.predicate.value === SEC_DIGEST_MULTIBASE) digestMultibase = q.object.value;
+    else if (q.predicate.value === SCHEMA_ENCODING_FORMAT) mediaType = q.object.value;
+  }
+  return {
+    id: iri,
+    ...digestSRI !== void 0 ? { digestSRI } : {},
+    ...digestMultibase !== void 0 ? { digestMultibase } : {},
+    ...mediaType !== void 0 ? { mediaType } : {}
+  };
 }
 
 // src/presentation.ts
@@ -1361,23 +1419,28 @@ async function parseAndVerifyCredential(body, contentType2, options) {
       resolveKey: options.resolveKey
     })
   );
-  if (options.checkStatus !== false && errors.length === 0) {
-    const entries = readStatusEntries(dataset, node.value);
-    if (entries.length > 0) {
-      errors.push(
-        ...await checkCredentialStatus({
-          entries,
-          credentialId: node.value,
-          issuer,
-          now,
-          fetch: options.fetch,
-          revocationStore: options.revocationStore,
-          registry,
-          resolveKey: options.resolveKey,
-          isControlledBy: options.isControlledBy,
-          verifyStatusCredential: parseAndVerifyCredential
-        })
-      );
+  if (errors.length === 0) {
+    if (options.checkStatus !== false) {
+      const entries = readStatusEntries(dataset, node.value);
+      if (entries.length > 0) {
+        errors.push(
+          ...await checkCredentialStatus({
+            entries,
+            credentialId: node.value,
+            issuer,
+            now,
+            fetch: options.fetch,
+            revocationStore: options.revocationStore,
+            registry,
+            resolveKey: options.resolveKey,
+            isControlledBy: options.isControlledBy,
+            verifyStatusCredential: parseAndVerifyCredential
+          })
+        );
+      }
+    }
+    if (options.checkPolicyBinding !== false) {
+      errors.push(...await policyBindingErrorsFromQuads(documentQuads, { fetch: options.fetch }));
     }
   }
   return errors.length === 0 ? {
@@ -1504,22 +1567,28 @@ async function verifyCredential(vc, options) {
       resolveKey: options.resolveKey
     })
   );
-  const statusEntries = statusEntriesOf(vc);
-  if (statusEntries.length > 0 && options.checkStatus !== false && errors.length === 0) {
-    errors.push(
-      ...await checkCredentialStatus({
-        entries: statusEntries,
-        credentialId: typeof vc.id === "string" ? vc.id : void 0,
-        issuer,
-        now,
-        fetch: options.fetch,
-        revocationStore: options.revocationStore,
-        registry,
-        resolveKey: options.resolveKey,
-        isControlledBy: options.isControlledBy,
-        verifyStatusCredential: parseAndVerifyCredential
-      })
-    );
+  if (errors.length === 0) {
+    const statusEntries = statusEntriesOf(vc);
+    if (statusEntries.length > 0 && options.checkStatus !== false) {
+      errors.push(
+        ...await checkCredentialStatus({
+          entries: statusEntries,
+          credentialId: typeof vc.id === "string" ? vc.id : void 0,
+          issuer,
+          now,
+          fetch: options.fetch,
+          revocationStore: options.revocationStore,
+          registry,
+          resolveKey: options.resolveKey,
+          isControlledBy: options.isControlledBy,
+          verifyStatusCredential: parseAndVerifyCredential
+        })
+      );
+    }
+    if (options.checkPolicyBinding !== false) {
+      const policyResult = await resolveBoundPolicy(vc, { fetch: options.fetch });
+      errors.push(...policyResult.errors);
+    }
   }
   return errors.length === 0 ? { verified: true, errors: [], issuer } : { verified: false, errors, issuer };
 }

@@ -421,6 +421,7 @@ export interface VerifyCredentialOptions extends VerifyOptions {
 
 // @public
 export interface VerifyOptions {
+    readonly checkPolicyBinding?: boolean;
     readonly checkStatus?: boolean;
     readonly expectedProofPurpose?: string;
     readonly fetch?: FetchPort;

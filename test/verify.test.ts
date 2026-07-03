@@ -19,12 +19,14 @@ import { ACL_READ, AGENT, expectDefined, ISSUER, issuerKey, keyResolver } from "
 // their actual concern. The document-resolved default has its own dedicated suite in
 // test/controller.test.ts.
 
+// No `policy` here: these gate tests concern signature / expiry / purpose / trust, not
+// policy-content binding (that has its own suite in test/policy-binding.test.ts). A bare
+// policy would now (correctly) fail verifyCredential with POLICY_INTEGRITY.
 const AUTH = {
   principal: ISSUER,
   agent: AGENT,
   action: ACL_READ,
   target: "https://alice.example/notes/",
-  policy: "https://alice.example/p.ttl#policy",
 } as const;
 
 describe("happy path", () => {
