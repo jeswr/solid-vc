@@ -250,3 +250,22 @@ describe("resolveBoundPolicy — array-shaped svc:policy is not embedded (robore
     expect(result.errors.map((e) => e.code)).toContain("POLICY_INTEGRITY");
   });
 });
+
+describe("resolveBoundPolicy — nested array svc:policy is flattened (roborev)", () => {
+  it("REJECTS a NESTED single-item svc:policy array (not embedded)", async () => {
+    const key = await issuerKey();
+    const vc = await issue({
+      credential: {
+        issuer: ISSUER,
+        type: ["AgentAuthorizationCredential"],
+        credentialSubject: { id: ISSUER, [SVC_POLICY]: [[POLICY_URL]] },
+      } as never,
+      key,
+    });
+    const result = await resolveBoundPolicy(vc, {
+      fetch: fakeFetch({ [POLICY_URL]: POLICY_OCTETS }),
+    });
+    expect(result.policy).toBeUndefined();
+    expect(result.errors.map((e) => e.code)).toContain("POLICY_INTEGRITY");
+  });
+});

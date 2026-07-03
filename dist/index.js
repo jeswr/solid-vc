@@ -1027,11 +1027,16 @@ function policyClaimsOf(vc) {
   for (const s of subjects) {
     if (s === null || typeof s !== "object") continue;
     const value = s[SVC_POLICY];
-    if (value === void 0) continue;
-    if (Array.isArray(value)) out.push(...value);
-    else out.push(value);
+    if (value !== void 0) flattenClaim(value, out);
   }
   return out;
+}
+function flattenClaim(value, out) {
+  if (Array.isArray(value)) {
+    for (const item of value) flattenClaim(item, out);
+  } else {
+    out.push(value);
+  }
 }
 function relatedResourceFor(vc, iri) {
   if (vc.relatedResource === void 0) return void 0;
