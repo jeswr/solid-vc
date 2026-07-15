@@ -104,12 +104,12 @@ async function dataIntegrityHash(documentQuads, proofOptionsQuads2) {
 // src/credential.ts
 import { randomUUID } from "node:crypto";
 
-// node_modules/@jeswr/fetch-rdf/dist/parse.js
+// node_modules/.pnpm/@jeswr+fetch-rdf@https+++codeload.github.com+jeswr+fetch-rdf+tar.gz+a8359a3764cb6b3c763e09ea211542a5dc7edc33/node_modules/@jeswr/fetch-rdf/dist/parse.js
 import contentType from "content-type";
 import { Store, StreamParser } from "n3";
 import { JsonLdParser } from "jsonld-streaming-parser";
 
-// node_modules/@jeswr/fetch-rdf/dist/errors.js
+// node_modules/.pnpm/@jeswr+fetch-rdf@https+++codeload.github.com+jeswr+fetch-rdf+tar.gz+a8359a3764cb6b3c763e09ea211542a5dc7edc33/node_modules/@jeswr/fetch-rdf/dist/errors.js
 var RdfFetchError = class extends Error {
   /** The original cause, if any (e.g. a network error or parser exception). */
   cause;
@@ -133,7 +133,7 @@ var RdfFetchError = class extends Error {
   }
 };
 
-// node_modules/@jeswr/fetch-rdf/dist/parse.js
+// node_modules/.pnpm/@jeswr+fetch-rdf@https+++codeload.github.com+jeswr+fetch-rdf+tar.gz+a8359a3764cb6b3c763e09ea211542a5dc7edc33/node_modules/@jeswr/fetch-rdf/dist/parse.js
 var SUPPORTED_RDF_MEDIA_TYPES = [
   "text/turtle",
   "application/n-triples",
@@ -294,70 +294,8 @@ async function digestRdfContent(content, contentType2 = "text/turtle") {
   return digestQuads(quads);
 }
 
-// node_modules/@jeswr/rdf-serialize/dist/iri.js
-var FORBIDDEN_SYMBOL_CODES = /* @__PURE__ */ new Set([
-  60,
-  // <
-  62,
-  // >
-  34,
-  // "
-  123,
-  // {
-  125,
-  // }
-  124,
-  // |
-  94,
-  // ^
-  96,
-  // ` (backtick)
-  92
-  // \ (backslash)
-]);
-function isForbidden(codePoint) {
-  return codePoint <= 32 || FORBIDDEN_SYMBOL_CODES.has(codePoint);
-}
-function escapeIri(value) {
-  let out = "";
-  for (const ch of value) {
-    const codePoint = ch.codePointAt(0);
-    if (isForbidden(codePoint)) {
-      out += `%${codePoint.toString(16).toUpperCase().padStart(2, "0")}`;
-    } else {
-      out += ch;
-    }
-  }
-  return out;
-}
-
-// node_modules/@jeswr/rdf-serialize/dist/serialize.js
-import { Writer } from "n3";
-var DEFAULT_FORMAT = "text/turtle";
-function serialize(quads, options) {
-  const format = options?.format ?? DEFAULT_FORMAT;
-  const prefixes = options?.prefixes ?? {};
-  const emptyAsEmptyString = options?.emptyAsEmptyString ?? true;
-  if (emptyAsEmptyString && quads.length === 0) {
-    return Promise.resolve("");
-  }
-  return new Promise((resolve, reject2) => {
-    const writer = new Writer({ format, prefixes });
-    writer.addQuads(quads);
-    writer.end((error, result) => {
-      if (error) {
-        reject2(error);
-      } else {
-        resolve(result);
-      }
-    });
-  });
-}
-function legacySerialize(quads, format = DEFAULT_FORMAT, prefixes = {}, emptyAsEmptyString = true) {
-  return serialize(quads, { format, prefixes, emptyAsEmptyString });
-}
-
 // src/iri.ts
+import { escapeIri } from "@jeswr/rdf-serialize";
 function hasUrlStripDivergence(value) {
   if (value.length === 0) return false;
   if (value.charCodeAt(0) <= 32 || value.charCodeAt(value.length - 1) <= 32) {
@@ -369,7 +307,7 @@ function hasUrlStripDivergence(value) {
   }
   return false;
 }
-function safeHttpIri2(value) {
+function safeHttpIri(value) {
   if (typeof value !== "string") return void 0;
   if (hasUrlStripDivergence(value)) return void 0;
   const escaped = escapeIri(value);
@@ -389,7 +327,7 @@ function isAbsoluteIri(value) {
 function safeObjectIri(value) {
   if (typeof value !== "string") return void 0;
   if (hasUrlStripDivergence(value)) return void 0;
-  const http = safeHttpIri2(value);
+  const http = safeHttpIri(value);
   if (http !== void 0) return http;
   if (/^https?:/i.test(value)) return void 0;
   return isAbsoluteIri(value) ? escapeIri(value) : void 0;
@@ -405,6 +343,9 @@ function requireObjectIri(value, field) {
   }
   return iri;
 }
+
+// src/serialize.ts
+import { legacySerialize } from "@jeswr/rdf-serialize";
 
 // src/vocab.ts
 var VC = "https://www.w3.org/2018/credentials#";
@@ -484,7 +425,7 @@ var PREFIXES = {
   rdfs: RDFS,
   dcterms: DC_CREATED.replace("created", "")
 };
-function serialize2(quads, format = "text/turtle") {
+function serialize(quads, format = "text/turtle") {
   return legacySerialize(quads, format, PREFIXES);
 }
 
@@ -851,7 +792,7 @@ function credentialToRdf(credential) {
   return b.quads();
 }
 function credentialToTurtle(credential, format) {
-  return serialize2(credentialToRdf(credential), format);
+  return serialize(credentialToRdf(credential), format);
 }
 function credentialToJsonLd(credential) {
   requireObjectIri(credential.issuer, "issuer");
@@ -1759,7 +1700,7 @@ var VerificationMethodNode = class extends TermWrapper2 {
   }
 };
 async function publishVerificationMethod(input) {
-  const controller = safeHttpIri2(input.controller);
+  const controller = safeHttpIri(input.controller);
   if (controller === void 0) {
     throw new Error(
       `@jeswr/solid-vc: publishVerificationMethod controller must be an absolute http(s) IRI, got ${JSON.stringify(input.controller)}`
@@ -1772,7 +1713,7 @@ async function publishVerificationMethod(input) {
       "@jeswr/solid-vc: publishVerificationMethod requires a verificationMethod IRI (explicit, or via a KeyPair)"
     );
   }
-  const verificationMethod = safeHttpIri2(vmInput);
+  const verificationMethod = safeHttpIri(vmInput);
   if (verificationMethod === void 0) {
     throw new Error(
       `@jeswr/solid-vc: publishVerificationMethod verificationMethod must be an absolute http(s) IRI, got ${JSON.stringify(vmInput)}`
@@ -1787,7 +1728,7 @@ async function publishVerificationMethod(input) {
   g.addIri(verificationMethod, SEC_CONTROLLER, controller);
   g.addLiteral(verificationMethod, SEC_PUBLIC_KEY_MULTIBASE, publicKeyMultibase, SEC_MULTIBASE);
   const quads = g.quads();
-  const turtle = await serialize2(quads);
+  const turtle = await serialize(quads);
   return { controller, verificationMethod, publicKeyMultibase, keyType, quads, turtle };
 }
 function isKeyPair(key) {
@@ -1851,8 +1792,8 @@ function literalValues(terms) {
   return out;
 }
 async function resolveWebIdKeyInternal(webId, keyId, fetchImpl, cache) {
-  const controller = safeHttpIri2(webId);
-  const verificationMethod = safeHttpIri2(keyId);
+  const controller = safeHttpIri(webId);
+  const verificationMethod = safeHttpIri(keyId);
   if (controller === void 0 || verificationMethod === void 0) return void 0;
   const controllerDocUrl = documentUrlOf(controller);
   const controllerDoc = await fetchDocument(controllerDocUrl, fetchImpl, cache);
@@ -1894,7 +1835,7 @@ function createWebIdKeyResolver(options = {}) {
   const resolveKey = async (verificationMethod) => {
     try {
       const fetchImpl = await fetchOf();
-      const vm = safeHttpIri2(verificationMethod);
+      const vm = safeHttpIri(verificationMethod);
       if (vm === void 0) return void 0;
       const keyDoc = await fetchDocument(documentUrlOf(vm), fetchImpl, cache);
       if (keyDoc === void 0) return void 0;
@@ -2367,7 +2308,7 @@ export {
   relatedResourcesFromNode,
   resolveBitstringStatus,
   resolveWebIdKey,
-  serialize2 as serialize,
+  serialize,
   setStatusBit,
   statusListBitsOf,
   verifyCredential,
